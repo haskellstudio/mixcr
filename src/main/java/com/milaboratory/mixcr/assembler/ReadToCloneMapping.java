@@ -80,6 +80,10 @@ public final class ReadToCloneMapping {
         return getMappingType(mappingType);
     }
 
+    public byte getMappingTypeByte() {
+        return mappingType;
+    }
+
     @Override
     public String toString() {
         return isDropped() ? "" : "" + alignmentsId + " -> " + cloneIndex + " " + (isPreClustered() ? "p" : "") + (isClustered() ? "c" : "") + (isMapped() ? "m" : "");

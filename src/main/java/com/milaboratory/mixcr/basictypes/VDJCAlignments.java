@@ -126,6 +126,15 @@ public final class VDJCAlignments extends VDJCObject {
         return ReadToCloneMapping.getMappingType(mappingType);
     }
 
+    public int getCloneIndex() {
+        return cloneIndex;
+    }
+
+    public VDJCAlignments setMapping(ReadToCloneMapping mapping) {
+        return new VDJCAlignments(alignmentsIndex, hits, targets, history, originalReads,
+                mapping.getMappingTypeByte(), mapping.getCloneIndex());
+    }
+
     public VDJCAlignments shiftReadId(long newAlignmentIndex, long shift) {
         return new VDJCAlignments(newAlignmentIndex, hits, targets, shift(history, shift), shift(originalReads, shift));
     }

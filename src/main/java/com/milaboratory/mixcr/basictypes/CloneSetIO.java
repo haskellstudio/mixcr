@@ -194,10 +194,10 @@ public final class CloneSetIO {
         return cloneSet;
     }
 
-    private static class GT2GFAdapter implements HasFeatureToAlign {
+    public static class GT2GFAdapter implements HasFeatureToAlign {
         final EnumMap<GeneType, GeneFeature> map;
 
-        private GT2GFAdapter(EnumMap<GeneType, GeneFeature> map) {
+        public GT2GFAdapter(EnumMap<GeneType, GeneFeature> map) {
             this.map = map;
         }
 
