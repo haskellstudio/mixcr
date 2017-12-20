@@ -34,7 +34,6 @@ import cc.redberry.pipe.OutputPortCloseable;
 import com.milaboratory.primitivio.PrimitivO;
 import com.milaboratory.util.CanReportProgress;
 import com.milaboratory.util.Sorter;
-import gnu.trove.iterator.TLongIterator;
 import gnu.trove.list.array.TLongArrayList;
 import io.repseq.core.GeneFeature;
 import org.apache.commons.io.output.CountingOutputStream;
@@ -65,6 +64,8 @@ public final class ClnAWriter implements AutoCloseable, CanReportProgress {
         this.output = new PrimitivO(this.outputStream);
     }
 
+    private long positionOfFirstClone = -1;
+
     /**
      * Step 1
      */
@@ -75,8 +76,10 @@ public final class ClnAWriter implements AutoCloseable, CanReportProgress {
         output.writeObject(assemblingFeatures);
         IO.writeGT2GFMap(output, cloneSet.alignedFeatures);
 
-        IOUtil.writeGeneReferences(output, cloneSet.getUsedGenes(),
+        IOUtil.writeAndRegisterGeneReferences(output, cloneSet.getUsedGenes(),
                 new CloneSetIO.GT2GFAdapter(cloneSet.alignedFeatures));
+
+        positionOfFirstClone = outputStream.getByteCount();
 
         for (Clone clone : cloneSet)
             output.writeObject(clone);
@@ -113,6 +116,7 @@ public final class ClnAWriter implements AutoCloseable, CanReportProgress {
             throw new IllegalStateException("Call sortAlignments before this method.");
 
         TLongArrayList index = new TLongArrayList();
+        TLongArrayList counts = new TLongArrayList();
 
         // Position of alignments with cloneIndex = -1 (not aligned alignments)
         index.add(outputStream.getByteCount());
@@ -127,23 +131,31 @@ public final class ClnAWriter implements AutoCloseable, CanReportProgress {
                 if (alignments.cloneIndex >= numberOfClones)
                     throw new IllegalArgumentException("Out of range clone Index in alignment: " + currentCloneIndex);
                 index.add(outputStream.getByteCount());
+                if (counts.isEmpty())
+                    counts.add(numberOfAlignmentsWritten);
+                else
+                    counts.add(numberOfAlignmentsWritten - counts.get(counts.size() - 1));
             }
             output.writeObject(alignments);
             ++numberOfAlignmentsWritten;
         }
+        counts.add(numberOfAlignmentsWritten - counts.get(counts.size() - 1));
 
         // Writing position of last alignments block end
         index.add(outputStream.getByteCount());
+        counts.add(0);
 
         long indexBeginOffset = outputStream.getByteCount();
         long previousValue = 0;
-        TLongIterator iterator = index.iterator();
-        while (iterator.hasNext()) {
-            long value = iterator.next();
-            output.writeVarLong(value - previousValue);
-            previousValue = value;
+
+        for (int i = 0; i < index.size(); i++) {
+            long iValue = index.get(i);
+            output.writeVarLong(iValue - previousValue);
+            previousValue = iValue;
+            output.writeVarLong(counts.get(i));
         }
 
+        output.writeLong(positionOfFirstClone);
         output.writeLong(indexBeginOffset);
 
         finished = true;

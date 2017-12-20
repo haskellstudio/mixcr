@@ -28,9 +28,10 @@
  */
 package com.milaboratory.mixcr.basictypes;
 
+import cc.redberry.pipe.OutputPort;
+import com.milaboratory.primitivio.PipeDataInputReader;
 import com.milaboratory.primitivio.PrimitivI;
 import io.repseq.core.GeneFeature;
-import io.repseq.core.GeneType;
 import io.repseq.core.VDJCGene;
 import io.repseq.core.VDJCLibraryRegistry;
 
@@ -43,23 +44,27 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
-import java.util.EnumMap;
 import java.util.List;
 
 public final class ClnAReader implements AutoCloseable {
     final int chunk = 262144;
     final FileChannel channel;
+    final long firstClonePosition;
     final long[] index;
+    final long[] counts;
     final VDJCLibraryRegistry libraryRegistry;
+    final GeneFeature[] assemblingFeatures;
+    final CloneSetIO.GT2GFAdapter alignedFeatures;
+    final List<VDJCGene> genes;
 
     public ClnAReader(Path path, VDJCLibraryRegistry libraryRegistry) throws IOException {
         this.channel = FileChannel.open(path, StandardOpenOption.READ);
-        this.index = checkMagicAndReadIndex();
         this.libraryRegistry = libraryRegistry;
-    }
 
-    private long[] checkMagicAndReadIndex() throws IOException {
+        PrimitivI input;
+        // reading index
         ByteBuffer buf = ByteBuffer.allocate(ClnAWriter.MAGIC_LENGTH + 4);
+        channel.read(buf, 0L);
 
         byte[] magicBytes = new byte[ClnAWriter.MAGIC_LENGTH];
         buf.get(magicBytes);
@@ -72,40 +77,93 @@ public final class ClnAReader implements AutoCloseable {
         int numberOfClones = buf.getInt();
 
         buf.reset();
-        buf.limit(8);
+        buf.limit(16);
         long fSize = channel.size();
-        channel.read(buf, fSize - 8);
+        channel.read(buf, fSize - 16);
 
+        this.firstClonePosition = buf.getLong();
         long indexBegin = buf.getLong();
 
-        PrimitivI input = new PrimitivI(new InputDataStream(indexBegin, fSize - 8));
+        input = new PrimitivI(new InputDataStream(indexBegin, fSize - 8));
 
-        long[] index = new long[numberOfClones];
+        this.index = new long[numberOfClones + 2];
+        this.counts = new long[numberOfClones + 2];
         long previousValue = 0;
-        for (int i = 0; i < numberOfClones + 2; i++)
+        for (int i = 0; i < numberOfClones + 2; i++) {
             previousValue = index[i] = previousValue + input.readVarInt();
+            counts[i] = input.readVarLong();
+        }
 
-        return index;
+        // reading gene features
+
+        input = new PrimitivI(new InputDataStream(ClnAWriter.MAGIC_LENGTH + 4, firstClonePosition));
+        this.assemblingFeatures = input.readObject(GeneFeature[].class);
+        this.alignedFeatures = new CloneSetIO.GT2GFAdapter(IO.readGF2GTMap(input));
+        this.genes = IOUtil.readGeneReferences(input, libraryRegistry);
     }
 
-    public int numberOfClones(){
+    public int numberOfClones() {
         return index.length - 2;
     }
 
     public CloneSet readCloneSet() throws IOException {
-        PrimitivI input = new PrimitivI(new InputDataStream(ClnAWriter.MAGIC_LENGTH + 4, index[0]));
-
-        GeneFeature[] assemblingFeatures = input.readObject(GeneFeature[].class);
-        EnumMap<GeneType, GeneFeature> alignedFeatures = IO.readGF2GTMap(input);
-        List<VDJCGene> genes = IOUtil.readGeneReferences(input, libraryRegistry,
-                new CloneSetIO.GT2GFAdapter(alignedFeatures));
+        PrimitivI input = new PrimitivI(new InputDataStream(firstClonePosition, index[0]));
+        IOUtil.putGeneReferences(input, genes, alignedFeatures);
 
         int count = index.length - 2;
         List<Clone> clones = new ArrayList<>(count);
         for (int i = 0; i < count; i++)
             clones.add(input.readObject(Clone.class));
 
-        return new CloneSet(clones, genes, alignedFeatures, assemblingFeatures);
+        return new CloneSet(clones, genes, alignedFeatures.map, assemblingFeatures);
+    }
+
+    public OutputPort<Clone> readClones() throws IOException {
+        PrimitivI input = new PrimitivI(new InputDataStream(firstClonePosition, index[0]));
+        IOUtil.putGeneReferences(input, genes, alignedFeatures);
+
+        return new PipeDataInputReader<>(Clone.class, input, numberOfClones());
+    }
+
+    public OutputPort<VDJCAlignments> alignmentsPort(int clone) throws IOException {
+        PrimitivI input = new PrimitivI(new InputDataStream(index[clone + 1], index[clone + 2]));
+        IOUtil.putGeneReferences(input, genes, alignedFeatures);
+        return new PipeDataInputReader<>(VDJCAlignments.class, input, counts[clone + 1]);
+    }
+
+    public OutputPort<CloneAlignments> clonesAndAlignments() throws IOException {
+        PrimitivI input = new PrimitivI(new InputDataStream(firstClonePosition, index[0]));
+        IOUtil.putGeneReferences(input, genes, alignedFeatures);
+
+        PipeDataInputReader<Clone> clones = new PipeDataInputReader<>(Clone.class, input, numberOfClones());
+
+        return new OutputPort<CloneAlignments>() {
+            private int cloneIndex = 0;
+
+            @Override
+            public CloneAlignments take() {
+                Clone clone = clones.take();
+                if (clone == null)
+                    return null;
+                CloneAlignments result = new CloneAlignments(clone, cloneIndex);
+                ++cloneIndex;
+                return result;
+            }
+        };
+    }
+
+    public final class CloneAlignments {
+        public final Clone clone;
+        final int cloneId;
+
+        private CloneAlignments(Clone clone, int cloneId) {
+            this.clone = clone;
+            this.cloneId = cloneId;
+        }
+
+        public OutputPort<VDJCAlignments> alignments() throws IOException {
+            return alignmentsPort(cloneId);
+        }
     }
 
     @Override

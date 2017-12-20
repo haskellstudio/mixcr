@@ -42,8 +42,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class IOUtil {
-    public static void writeGeneReferences(PrimitivO output, List<VDJCGene> genes,
-                                           HasFeatureToAlign featuresToAlign) {
+    public static void writeAndRegisterGeneReferences(PrimitivO output, List<VDJCGene> genes,
+                                                      HasFeatureToAlign featuresToAlign) {
         // Writing gene ids
         output.writeInt(genes.size());
         for (VDJCGene gene : genes)
@@ -65,8 +65,7 @@ public class IOUtil {
         }
     }
 
-    public static List<VDJCGene> readGeneReferences(PrimitivI input, VDJCLibraryRegistry registry,
-                                                    HasFeatureToAlign featuresToAlign) {
+    public static List<VDJCGene> readGeneReferences(PrimitivI input, VDJCLibraryRegistry registry) {
         // Reading gene ids
         int count = input.readInt();
         List<VDJCGene> genes = new ArrayList<>(count);
@@ -78,6 +77,18 @@ public class IOUtil {
             genes.add(gene);
         }
 
+        return genes;
+    }
+
+    public static List<VDJCGene> readAndRegisterGeneReferences(PrimitivI input, VDJCLibraryRegistry registry,
+                                                               HasFeatureToAlign featuresToAlign) {
+        List<VDJCGene> genes = readGeneReferences(input, registry);
+        putGeneReferences(input, genes, featuresToAlign);
+        return genes;
+    }
+
+    public static void putGeneReferences(PrimitivI input, List<VDJCGene> genes,
+                                         HasFeatureToAlign featuresToAlign) {
         // Putting genes references and feature sequences to be serialized/deserialized as references
         for (VDJCGene gene : genes) {
             input.putKnownReference(gene);
@@ -92,8 +103,6 @@ public class IOUtil {
                 input.putKnownReference(featureSequence);
             }
         }
-
-        return genes;
     }
 
     public static InputStream createIS(String file) throws IOException {
