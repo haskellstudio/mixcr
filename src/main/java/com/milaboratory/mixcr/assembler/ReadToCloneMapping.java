@@ -38,6 +38,8 @@ public final class ReadToCloneMapping {
     final byte mappingType;
 
     public ReadToCloneMapping(long alignmentsId, int cloneIndex, boolean clustered, boolean additionalMapping, boolean droppedWithClone, boolean preClustered) {
+        if (cloneIndex < 0)
+            cloneIndex = -1;
         this.alignmentsId = alignmentsId;
         this.cloneIndex = cloneIndex;
         assert !droppedWithClone || cloneIndex < 0;
@@ -197,7 +199,7 @@ public final class ReadToCloneMapping {
             ALIGNMENTS_COMPARATOR = new AlignmentsComparator();
 
     private static final class CloneComparator implements Comparator<ReadToCloneMapping>,
-            java.io.Serializable {
+                                                          java.io.Serializable {
         private static final long serialVersionUID = 1L;
 
         private CloneComparator() {
@@ -220,7 +222,7 @@ public final class ReadToCloneMapping {
     }
 
     private static final class AlignmentsComparator implements Comparator<ReadToCloneMapping>,
-            java.io.Serializable {
+                                                               java.io.Serializable {
         private static final long serialVersionUID = 1L;
 
         private AlignmentsComparator() {

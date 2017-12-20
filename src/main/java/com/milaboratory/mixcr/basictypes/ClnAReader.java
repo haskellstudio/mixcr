@@ -65,6 +65,7 @@ public final class ClnAReader implements AutoCloseable {
         // reading index
         ByteBuffer buf = ByteBuffer.allocate(ClnAWriter.MAGIC_LENGTH + 4);
         channel.read(buf, 0L);
+        buf.position(0);
 
         byte[] magicBytes = new byte[ClnAWriter.MAGIC_LENGTH];
         buf.get(magicBytes);
@@ -76,10 +77,11 @@ public final class ClnAReader implements AutoCloseable {
 
         int numberOfClones = buf.getInt();
 
-        buf.reset();
+        buf.position(0);
         buf.limit(16);
         long fSize = channel.size();
         channel.read(buf, fSize - 16);
+        buf.position(0);
 
         this.firstClonePosition = buf.getLong();
         long indexBegin = buf.getLong();
@@ -108,7 +110,7 @@ public final class ClnAReader implements AutoCloseable {
 
     public CloneSet readCloneSet() throws IOException {
         PrimitivI input = new PrimitivI(new InputDataStream(firstClonePosition, index[0]));
-        IOUtil.putGeneReferences(input, genes, alignedFeatures);
+        IOUtil.registerGeneReferences(input, genes, alignedFeatures);
 
         int count = index.length - 2;
         List<Clone> clones = new ArrayList<>(count);
@@ -120,20 +122,20 @@ public final class ClnAReader implements AutoCloseable {
 
     public OutputPort<Clone> readClones() throws IOException {
         PrimitivI input = new PrimitivI(new InputDataStream(firstClonePosition, index[0]));
-        IOUtil.putGeneReferences(input, genes, alignedFeatures);
+        IOUtil.registerGeneReferences(input, genes, alignedFeatures);
 
         return new PipeDataInputReader<>(Clone.class, input, numberOfClones());
     }
 
     public OutputPort<VDJCAlignments> alignmentsPort(int clone) throws IOException {
         PrimitivI input = new PrimitivI(new InputDataStream(index[clone + 1], index[clone + 2]));
-        IOUtil.putGeneReferences(input, genes, alignedFeatures);
+        IOUtil.registerGeneReferences(input, genes, alignedFeatures);
         return new PipeDataInputReader<>(VDJCAlignments.class, input, counts[clone + 1]);
     }
 
     public OutputPort<CloneAlignments> clonesAndAlignments() throws IOException {
         PrimitivI input = new PrimitivI(new InputDataStream(firstClonePosition, index[0]));
-        IOUtil.putGeneReferences(input, genes, alignedFeatures);
+        IOUtil.registerGeneReferences(input, genes, alignedFeatures);
 
         PipeDataInputReader<Clone> clones = new PipeDataInputReader<>(Clone.class, input, numberOfClones());
 
@@ -176,7 +178,7 @@ public final class ClnAReader implements AutoCloseable {
         private final ByteBuffer buffer;
         private long lastPosition;
 
-        public InputDataStream(long from, long to) throws IOException {
+        InputDataStream(long from, long to) throws IOException {
             this.to = to;
             this.buffer = ByteBuffer.allocate(chunk);
             this.lastPosition = from;
@@ -189,10 +191,9 @@ public final class ClnAReader implements AutoCloseable {
             int read = channel.read(buffer, first
                     ? lastPosition
                     : lastPosition - buffer.remaining());
+            buffer.position(chunk - size);
             if (read != size)
                 throw new IOException("Wrong block positions.");
-            if (read != 0)
-                throw new IOException("Wrong block size.");
         }
 
         void ensureBuffer(int requiredSize) throws IOException {

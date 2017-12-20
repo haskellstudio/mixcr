@@ -49,6 +49,11 @@ public class IOUtil {
         for (VDJCGene gene : genes)
             output.writeObject(gene.getId());
 
+        registerGeneReferences(output, genes, featuresToAlign);
+    }
+
+    public static void registerGeneReferences(PrimitivO output, List<VDJCGene> genes,
+                                              HasFeatureToAlign featuresToAlign) {
         // Putting genes references and feature sequences to be serialized/deserialized as references
         for (VDJCGene gene : genes) {
             output.putKnownReference(gene);
@@ -83,12 +88,12 @@ public class IOUtil {
     public static List<VDJCGene> readAndRegisterGeneReferences(PrimitivI input, VDJCLibraryRegistry registry,
                                                                HasFeatureToAlign featuresToAlign) {
         List<VDJCGene> genes = readGeneReferences(input, registry);
-        putGeneReferences(input, genes, featuresToAlign);
+        registerGeneReferences(input, genes, featuresToAlign);
         return genes;
     }
 
-    public static void putGeneReferences(PrimitivI input, List<VDJCGene> genes,
-                                         HasFeatureToAlign featuresToAlign) {
+    public static void registerGeneReferences(PrimitivI input, List<VDJCGene> genes,
+                                              HasFeatureToAlign featuresToAlign) {
         // Putting genes references and feature sequences to be serialized/deserialized as references
         for (VDJCGene gene : genes) {
             input.putKnownReference(gene);

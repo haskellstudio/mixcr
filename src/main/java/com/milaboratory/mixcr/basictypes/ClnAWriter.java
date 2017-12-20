@@ -31,53 +31,63 @@ package com.milaboratory.mixcr.basictypes;
 import cc.redberry.pipe.CUtils;
 import cc.redberry.pipe.OutputPort;
 import cc.redberry.pipe.OutputPortCloseable;
+import com.milaboratory.primitivio.PipeDataInputReader;
+import com.milaboratory.primitivio.PrimitivI;
 import com.milaboratory.primitivio.PrimitivO;
 import com.milaboratory.util.CanReportProgress;
+import com.milaboratory.util.ObjectSerializer;
 import com.milaboratory.util.Sorter;
 import gnu.trove.list.array.TLongArrayList;
 import io.repseq.core.GeneFeature;
+import io.repseq.core.VDJCGene;
 import org.apache.commons.io.output.CountingOutputStream;
 
-import java.io.BufferedOutputStream;
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
+import java.io.*;
 import java.nio.charset.StandardCharsets;
+import java.util.Collection;
+import java.util.List;
 
 public final class ClnAWriter implements AutoCloseable, CanReportProgress {
     static final String MAGIC_V1 = "MiXCR.CLNA.V01";
     static final String MAGIC = MAGIC_V1;
-    static final int MAGIC_LENGTH = 14;
+    static final int MAGIC_LENGTH = MAGIC.length();
     private final File tempFile;
     private final CountingOutputStream outputStream;
     private final PrimitivO output;
     private volatile int numberOfClones = -1;
-    private volatile OutputPortCloseable<VDJCAlignments> sortedAligtnments = null;
+    private volatile OutputPortCloseable<VDJCAlignments> sortedAlignments = null;
     private volatile long numberOfAlignments = -1, numberOfAlignmentsWritten = 0;
     private volatile boolean finished = false;
+    private HasFeatureToAlign alignmentFeatureToAlign;
 
-    public ClnAWriter(File file) throws IOException {
+    public ClnAWriter(File file, HasFeatureToAlign alignmentFeatureToAlign) throws IOException {
         this.tempFile = new File(file.getAbsolutePath() + ".unsorted");
         this.outputStream = new CountingOutputStream(new BufferedOutputStream(
                 new FileOutputStream(file), 131072));
         this.outputStream.write(MAGIC.getBytes(StandardCharsets.UTF_8));
         this.output = new PrimitivO(this.outputStream);
+        this.alignmentFeatureToAlign = alignmentFeatureToAlign;
     }
 
     private long positionOfFirstClone = -1;
+
+    private List<VDJCGene> usedGenes = null;
+    private HasFeatureToAlign cloneFeatureToAlign = null;
 
     /**
      * Step 1
      */
     public synchronized void writeClones(CloneSet cloneSet) {
+        this.usedGenes = cloneSet.getUsedGenes();
+        this.cloneFeatureToAlign = new CloneSetIO.GT2GFAdapter(cloneSet.alignedFeatures);
+
         output.writeInt(cloneSet.size());
 
         GeneFeature[] assemblingFeatures = cloneSet.getAssemblingFeatures();
         output.writeObject(assemblingFeatures);
         IO.writeGT2GFMap(output, cloneSet.alignedFeatures);
 
-        IOUtil.writeAndRegisterGeneReferences(output, cloneSet.getUsedGenes(),
-                new CloneSetIO.GT2GFAdapter(cloneSet.alignedFeatures));
+        IOUtil.writeAndRegisterGeneReferences(output, usedGenes, cloneFeatureToAlign);
 
         positionOfFirstClone = outputStream.getByteCount();
 
@@ -90,29 +100,56 @@ public final class ClnAWriter implements AutoCloseable, CanReportProgress {
     /**
      * Step 2
      */
-    public synchronized void sortAlignments(OutputPort<VDJCAlignments> alignments, long numberOfAlignments) throws IOException {
+    public synchronized void sortAlignments(OutputPort<VDJCAlignments> alignments,
+                                            long numberOfAlignments) throws IOException {
         if (numberOfClones == -1)
             throw new IllegalStateException("Write clones before writing alignments.");
 
         this.numberOfAlignments = numberOfAlignments;
         int chunkSize = (int) Math.min(Math.max(16384, numberOfAlignments / 8), 1048576);
 
-        sortedAligtnments = Sorter.sort(alignments, (o1, o2) -> {
+        sortedAlignments = Sorter.sort(alignments, (o1, o2) -> {
                     int i = Integer.compare(o1.cloneIndex, o2.cloneIndex);
                     if (i != 0)
                         return i;
                     return Byte.compare(o1.mappingType, o2.mappingType);
                 },
                 chunkSize,
-                VDJCAlignments.class,
+                new VDJCAlignmentsSerializer(usedGenes, alignmentFeatureToAlign),
                 tempFile);
+    }
+
+    public static final class VDJCAlignmentsSerializer implements ObjectSerializer<VDJCAlignments> {
+        final List<VDJCGene> genes;
+        final HasFeatureToAlign featureToAlign;
+
+        public VDJCAlignmentsSerializer(List<VDJCGene> genes, HasFeatureToAlign featureToAlign) {
+            this.genes = genes;
+            this.featureToAlign = featureToAlign;
+        }
+
+        @Override
+        public void write(Collection<VDJCAlignments> data, OutputStream stream) {
+            PrimitivO primitivO = new PrimitivO(stream);
+            IOUtil.registerGeneReferences(primitivO, genes, featureToAlign);
+            for (VDJCAlignments datum : data)
+                primitivO.writeObject(datum);
+            primitivO.writeObject(null);
+        }
+
+        @Override
+        public OutputPort<VDJCAlignments> read(InputStream stream) {
+            PrimitivI primitivI = new PrimitivI(stream);
+            IOUtil.registerGeneReferences(primitivI, genes, featureToAlign);
+            return new PipeDataInputReader<>(VDJCAlignments.class, primitivI);
+        }
     }
 
     /**
      * Step 3
      */
     public synchronized void writeAlignmentsAndIndex() {
-        if (sortedAligtnments == null)
+        if (sortedAlignments == null)
             throw new IllegalStateException("Call sortAlignments before this method.");
 
         TLongArrayList index = new TLongArrayList();
@@ -121,9 +158,10 @@ public final class ClnAWriter implements AutoCloseable, CanReportProgress {
         // Position of alignments with cloneIndex = -1 (not aligned alignments)
         index.add(outputStream.getByteCount());
 
+        long previousAlsCount = 0;
         int currentCloneIndex = -1;
 
-        for (VDJCAlignments alignments : CUtils.it(sortedAligtnments)) {
+        for (VDJCAlignments alignments : CUtils.it(sortedAlignments)) {
             if (currentCloneIndex != alignments.cloneIndex) {
                 ++currentCloneIndex;
                 if (currentCloneIndex != alignments.cloneIndex)
@@ -131,15 +169,13 @@ public final class ClnAWriter implements AutoCloseable, CanReportProgress {
                 if (alignments.cloneIndex >= numberOfClones)
                     throw new IllegalArgumentException("Out of range clone Index in alignment: " + currentCloneIndex);
                 index.add(outputStream.getByteCount());
-                if (counts.isEmpty())
-                    counts.add(numberOfAlignmentsWritten);
-                else
-                    counts.add(numberOfAlignmentsWritten - counts.get(counts.size() - 1));
+                counts.add(numberOfAlignmentsWritten - previousAlsCount);
+                previousAlsCount = numberOfAlignmentsWritten;
             }
             output.writeObject(alignments);
             ++numberOfAlignmentsWritten;
         }
-        counts.add(numberOfAlignmentsWritten - counts.get(counts.size() - 1));
+        counts.add(numberOfAlignmentsWritten - previousAlsCount);
 
         // Writing position of last alignments block end
         index.add(outputStream.getByteCount());
