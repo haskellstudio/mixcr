@@ -44,9 +44,8 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.Comparator;
 
-public final class CLNAWriter implements AutoCloseable, CanReportProgress {
+public final class ClnAWriter implements AutoCloseable, CanReportProgress {
     static final String MAGIC_V1 = "MiXCR.CLNA.V01";
     static final String MAGIC = MAGIC_V1;
     static final int MAGIC_LENGTH = 14;
@@ -58,7 +57,7 @@ public final class CLNAWriter implements AutoCloseable, CanReportProgress {
     private volatile long numberOfAlignments = -1, numberOfAlignmentsWritten = 0;
     private volatile boolean finished = false;
 
-    public CLNAWriter(File file) throws IOException {
+    public ClnAWriter(File file) throws IOException {
         this.tempFile = new File(file.getAbsolutePath() + ".unsorted");
         this.outputStream = new CountingOutputStream(new BufferedOutputStream(
                 new FileOutputStream(file), 131072));
@@ -70,14 +69,14 @@ public final class CLNAWriter implements AutoCloseable, CanReportProgress {
      * Step 1
      */
     public synchronized void writeClones(CloneSet cloneSet) {
+        output.writeInt(cloneSet.size());
+
         GeneFeature[] assemblingFeatures = cloneSet.getAssemblingFeatures();
         output.writeObject(assemblingFeatures);
         IO.writeGT2GFMap(output, cloneSet.alignedFeatures);
 
         IOUtil.writeGeneReferences(output, cloneSet.getUsedGenes(),
                 new CloneSetIO.GT2GFAdapter(cloneSet.alignedFeatures));
-
-        output.writeInt(cloneSet.getClones().size());
 
         for (Clone clone : cloneSet)
             output.writeObject(clone);
@@ -95,15 +94,11 @@ public final class CLNAWriter implements AutoCloseable, CanReportProgress {
         this.numberOfAlignments = numberOfAlignments;
         int chunkSize = (int) Math.min(Math.max(16384, numberOfAlignments / 8), 1048576);
 
-        sortedAligtnments = Sorter.sort(alignments,
-                new Comparator<VDJCAlignments>() {
-                    @Override
-                    public int compare(VDJCAlignments o1, VDJCAlignments o2) {
-                        int i = Integer.compare(o1.cloneIndex, o2.cloneIndex);
-                        if (i != 0)
-                            return i;
-                        return Byte.compare(o1.mappingType, o2.mappingType);
-                    }
+        sortedAligtnments = Sorter.sort(alignments, (o1, o2) -> {
+                    int i = Integer.compare(o1.cloneIndex, o2.cloneIndex);
+                    if (i != 0)
+                        return i;
+                    return Byte.compare(o1.mappingType, o2.mappingType);
                 },
                 chunkSize,
                 VDJCAlignments.class,
@@ -114,8 +109,12 @@ public final class CLNAWriter implements AutoCloseable, CanReportProgress {
      * Step 3
      */
     public synchronized void writeAlignmentsAndIndex() {
+        if (sortedAligtnments == null)
+            throw new IllegalStateException("Call sortAlignments before this method.");
+
         TLongArrayList index = new TLongArrayList();
 
+        // Position of alignments with cloneIndex = -1 (not aligned alignments)
         index.add(outputStream.getByteCount());
 
         int currentCloneIndex = -1;
@@ -132,6 +131,9 @@ public final class CLNAWriter implements AutoCloseable, CanReportProgress {
             output.writeObject(alignments);
             ++numberOfAlignmentsWritten;
         }
+
+        // Writing position of last alignments block end
+        index.add(outputStream.getByteCount());
 
         long indexBeginOffset = outputStream.getByteCount();
         long previousValue = 0;
