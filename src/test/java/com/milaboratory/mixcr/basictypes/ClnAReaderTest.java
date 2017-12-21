@@ -43,6 +43,7 @@ public class ClnAReaderTest {
 
         ClnAReader reader = new ClnAReader(file.toPath(), VDJCLibraryRegistry.createDefaultRegistry(), 17);
 
+        assertEquals(align.alignments.size(), reader.numberOfAlignments());
         assertEquals(assemble.cloneSet.size(), reader.numberOfClones());
 
         for (ClnAReader.CloneAlignments c : CUtils.it(reader.clonesAndAlignments())) {

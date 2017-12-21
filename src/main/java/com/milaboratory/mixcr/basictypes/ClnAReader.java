@@ -62,6 +62,7 @@ public final class ClnAReader implements AutoCloseable {
     final long firstClonePosition;
     final long[] index;
     final long[] counts;
+    final long totalAlignmentsCount;
 
     // From constructor
 
@@ -114,10 +115,12 @@ public final class ClnAReader implements AutoCloseable {
         this.index = new long[numberOfClones + 2];
         this.counts = new long[numberOfClones + 2];
         long previousValue = 0;
+        long totalAlignmentsCount = 0L;
         for (int i = 0; i < numberOfClones + 2; i++) {
             previousValue = index[i] = previousValue + input.readVarInt();
-            counts[i] = input.readVarLong();
+            totalAlignmentsCount += counts[i] = input.readVarLong();
         }
+        this.totalAlignmentsCount = totalAlignmentsCount;
 
         // Reading gene features
 
@@ -131,11 +134,21 @@ public final class ClnAReader implements AutoCloseable {
         this(path, libraryRegistry, DEFAULT_CHUNK_SIZE);
     }
 
+    /**
+     * Returns number of clones in the file
+     */
     public int numberOfClones() {
         // Index contain two additional records:
         //  - first = position of alignment block with cloneIndex == -1
         //  - last = position of the last alignments block end
         return index.length - 2;
+    }
+
+    /**
+     * Returns total number of alignments in the file, including unassembled.
+     */
+    public long numberOfAlignments() {
+        return totalAlignmentsCount;
     }
 
     /**
@@ -157,7 +170,7 @@ public final class ClnAReader implements AutoCloseable {
     }
 
     /**
-     * Constructs output port to read clones one by one as stream
+     * Constructs output port to read clones one by one as a stream
      */
     public OutputPort<Clone> readClones() throws IOException {
         PrimitivI input = new PrimitivI(new InputDataStream(firstClonePosition, index[0]));
@@ -167,14 +180,42 @@ public final class ClnAReader implements AutoCloseable {
     }
 
     /**
-     * Constructs output port to read alignments for a specific clone
+     * Constructs output port to read alignments for a specific clone, or read unassembled alignments block
      *
-     * @param cloneIndex index of clone
+     * @param cloneIndex index of clone; -1 to read unassembled alignments
      */
-    public OutputPort<VDJCAlignments> alignmentsPort(int cloneIndex) throws IOException {
+    public OutputPort<VDJCAlignments> readAlignmentsOfClone(int cloneIndex) throws IOException {
         PrimitivI input = new PrimitivI(new InputDataStream(index[cloneIndex + 1], index[cloneIndex + 2]));
         IOUtil.registerGeneReferences(input, genes, alignedFeatures);
         return new PipeDataInputReader<>(VDJCAlignments.class, input, counts[cloneIndex + 1]);
+    }
+
+    /**
+     * Constructs output port to read all alignments form the file. Alignments are sorted by cloneIndex.
+     */
+    public OutputPort<VDJCAlignments> readAllAlignments() throws IOException {
+        PrimitivI input = new PrimitivI(new InputDataStream(index[0], index[index.length - 1]));
+        IOUtil.registerGeneReferences(input, genes, alignedFeatures);
+        return new PipeDataInputReader<>(VDJCAlignments.class, input, totalAlignmentsCount);
+    }
+
+    /**
+     * Constructs output port to read all alignments that are attached to a clone. Alignments are sorted by cloneIndex.
+     */
+    public OutputPort<VDJCAlignments> readAssembledAlignments() throws IOException {
+        PrimitivI input = new PrimitivI(new InputDataStream(index[1], index[index.length - 1]));
+        IOUtil.registerGeneReferences(input, genes, alignedFeatures);
+        return new PipeDataInputReader<>(VDJCAlignments.class, input, totalAlignmentsCount - counts[0]);
+    }
+
+    /**
+     * Constructs output port to read alignments that are not attached to any clone. Alignments are sorted by
+     * cloneIndex.
+     *
+     * Returns: readAlignmentsOfClone(-1)
+     */
+    public OutputPort<VDJCAlignments> readNotAssembledAlignments() throws IOException {
+        return readAlignmentsOfClone(-1);
     }
 
     /**
@@ -221,7 +262,7 @@ public final class ClnAReader implements AutoCloseable {
          * Alignments
          */
         public OutputPort<VDJCAlignments> alignments() throws IOException {
-            return alignmentsPort(cloneId);
+            return readAlignmentsOfClone(cloneId);
         }
     }
 
