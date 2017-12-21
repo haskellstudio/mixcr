@@ -74,6 +74,10 @@ public final class ClnAReader implements AutoCloseable {
     final CloneSetIO.GT2GFAdapter alignedFeatures;
     final List<VDJCGene> genes;
 
+    // Meta data
+
+    final String versionInfo;
+
     public ClnAReader(Path path, VDJCLibraryRegistry libraryRegistry, int chunkSize) throws IOException {
         this.chunkSize = chunkSize;
         this.channel = FileChannel.open(path, StandardOpenOption.READ);
@@ -125,6 +129,7 @@ public final class ClnAReader implements AutoCloseable {
         // Reading gene features
 
         input = new PrimitivI(new InputDataStream(ClnAWriter.MAGIC_LENGTH + 4, firstClonePosition));
+        this.versionInfo = input.readUTF();
         this.assemblingFeatures = input.readObject(GeneFeature[].class);
         this.alignedFeatures = new CloneSetIO.GT2GFAdapter(IO.readGF2GTMap(input));
         this.genes = IOUtil.readGeneReferences(input, libraryRegistry);
@@ -149,6 +154,13 @@ public final class ClnAReader implements AutoCloseable {
      */
     public long numberOfAlignments() {
         return totalAlignmentsCount;
+    }
+
+    /**
+     * MiXCR version this file was produced with.
+     */
+    public String getVersionInfo() {
+        return versionInfo;
     }
 
     /**

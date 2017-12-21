@@ -31,6 +31,7 @@ package com.milaboratory.mixcr.basictypes;
 import cc.redberry.pipe.CUtils;
 import cc.redberry.pipe.OutputPort;
 import cc.redberry.pipe.OutputPortCloseable;
+import com.milaboratory.mixcr.util.MiXCRVersionInfo;
 import com.milaboratory.primitivio.PipeDataInputReader;
 import com.milaboratory.primitivio.PrimitivI;
 import com.milaboratory.primitivio.PrimitivO;
@@ -107,8 +108,12 @@ public final class ClnAWriter implements AutoCloseable, CanReportProgress {
         this.featureToAlign = new CloneSetIO.GT2GFAdapter(cloneSet.alignedFeatures);
 
         // Writing number of clones ahead of any other content to make it available
-        // in known file position: MAGIC_LENGTH
+        // in known file position (MAGIC_LENGTH)
         output.writeInt(cloneSet.size());
+
+        // Writing version information
+        output.writeUTF(MiXCRVersionInfo.get()
+                .getVersionString(MiXCRVersionInfo.OutputType.ToFile));
 
         // Saving assembling features
         GeneFeature[] assemblingFeatures = cloneSet.getAssemblingFeatures();

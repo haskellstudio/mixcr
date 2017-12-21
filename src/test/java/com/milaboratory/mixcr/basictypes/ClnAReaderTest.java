@@ -4,6 +4,7 @@ import cc.redberry.pipe.CUtils;
 import cc.redberry.pipe.OutputPort;
 import com.milaboratory.mixcr.assembler.AlignmentsMappingMerger;
 import com.milaboratory.mixcr.assembler.ReadToCloneMapping;
+import com.milaboratory.mixcr.util.MiXCRVersionInfo;
 import com.milaboratory.mixcr.util.RunMiXCR;
 import com.milaboratory.util.TempFileManager;
 import io.repseq.core.GeneFeature;
@@ -15,9 +16,8 @@ import java.io.File;
 import static org.junit.Assert.assertEquals;
 
 public class ClnAReaderTest {
-
     @Test
-    public void test4() throws Exception {
+    public void test1() throws Exception {
         RunMiXCR.RunMiXCRAnalysis params = new RunMiXCR.RunMiXCRAnalysis(
                 RunMiXCR.class.getResource("/sequences/test_R1.fastq").getFile(),
                 RunMiXCR.class.getResource("/sequences/test_R2.fastq").getFile());
@@ -42,6 +42,8 @@ public class ClnAReaderTest {
         writer.close();
 
         ClnAReader reader = new ClnAReader(file.toPath(), VDJCLibraryRegistry.createDefaultRegistry(), 17);
+
+        assertEquals(MiXCRVersionInfo.get().getVersionString(MiXCRVersionInfo.OutputType.ToFile), reader.getVersionInfo());
 
         assertEquals(align.alignments.size(), reader.numberOfAlignments());
         assertEquals(assemble.cloneSet.size(), reader.numberOfClones());
