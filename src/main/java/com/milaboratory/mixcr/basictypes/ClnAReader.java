@@ -46,26 +46,45 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Reader of CLNA file format.
+ */
 public final class ClnAReader implements AutoCloseable {
-    final int chunk = 262144;
+    public static final int DEFAULT_CHUNK_SIZE = 262144;
+    final int chunkSize;
+    /**
+     * Input file channel. All interaction with file are made through this object.
+     */
     final FileChannel channel;
+
+    // Index data
+
     final long firstClonePosition;
     final long[] index;
     final long[] counts;
+
+    // From constructor
+
     final VDJCLibraryRegistry libraryRegistry;
+
+    // Read form file header
+
     final GeneFeature[] assemblingFeatures;
     final CloneSetIO.GT2GFAdapter alignedFeatures;
     final List<VDJCGene> genes;
 
-    public ClnAReader(Path path, VDJCLibraryRegistry libraryRegistry) throws IOException {
+    public ClnAReader(Path path, VDJCLibraryRegistry libraryRegistry, int chunkSize) throws IOException {
+        this.chunkSize = chunkSize;
         this.channel = FileChannel.open(path, StandardOpenOption.READ);
         this.libraryRegistry = libraryRegistry;
 
         PrimitivI input;
-        // reading index
-        ByteBuffer buf = ByteBuffer.allocate(ClnAWriter.MAGIC_LENGTH + 4);
+
+        // Reading magic string
+
+        ByteBuffer buf = ByteBuffer.allocate(ClnAWriter.MAGIC_LENGTH + 4); // ClnAWriter.MAGIC_LENGTH + 4 = 18
         channel.read(buf, 0L);
-        buf.position(0);
+        buf.flip();
 
         byte[] magicBytes = new byte[ClnAWriter.MAGIC_LENGTH];
         buf.get(magicBytes);
@@ -75,19 +94,23 @@ public final class ClnAReader implements AutoCloseable {
             throw new IllegalArgumentException("Wrong file type. Magic = " + magicString +
                     ", expected = " + ClnAWriter.MAGIC);
 
+        // Reading number of clones
+
         int numberOfClones = buf.getInt();
 
-        buf.position(0);
+        // Reading key file offsets from last 16 bytes of the file
+
+        buf.flip();
         buf.limit(16);
         long fSize = channel.size();
         channel.read(buf, fSize - 16);
-        buf.position(0);
-
+        buf.flip();
         this.firstClonePosition = buf.getLong();
         long indexBegin = buf.getLong();
 
-        input = new PrimitivI(new InputDataStream(indexBegin, fSize - 8));
+        // Reading index data
 
+        input = new PrimitivI(new InputDataStream(indexBegin, fSize - 8));
         this.index = new long[numberOfClones + 2];
         this.counts = new long[numberOfClones + 2];
         long previousValue = 0;
@@ -96,7 +119,7 @@ public final class ClnAReader implements AutoCloseable {
             counts[i] = input.readVarLong();
         }
 
-        // reading gene features
+        // Reading gene features
 
         input = new PrimitivI(new InputDataStream(ClnAWriter.MAGIC_LENGTH + 4, firstClonePosition));
         this.assemblingFeatures = input.readObject(GeneFeature[].class);
@@ -104,15 +127,28 @@ public final class ClnAReader implements AutoCloseable {
         this.genes = IOUtil.readGeneReferences(input, libraryRegistry);
     }
 
+    public ClnAReader(Path path, VDJCLibraryRegistry libraryRegistry) throws IOException {
+        this(path, libraryRegistry, DEFAULT_CHUNK_SIZE);
+    }
+
     public int numberOfClones() {
+        // Index contain two additional records:
+        //  - first = position of alignment block with cloneIndex == -1
+        //  - last = position of the last alignments block end
         return index.length - 2;
     }
 
+    /**
+     * Read clone set completely
+     */
     public CloneSet readCloneSet() throws IOException {
         PrimitivI input = new PrimitivI(new InputDataStream(firstClonePosition, index[0]));
+        // Initializing PrimitivI object
+        // (see big comment block in ClnAWriter.writeClones())
         IOUtil.registerGeneReferences(input, genes, alignedFeatures);
 
-        int count = index.length - 2;
+        // Reading clones
+        int count = numberOfClones();
         List<Clone> clones = new ArrayList<>(count);
         for (int i = 0; i < count; i++)
             clones.add(input.readObject(Clone.class));
@@ -120,6 +156,9 @@ public final class ClnAReader implements AutoCloseable {
         return new CloneSet(clones, genes, alignedFeatures.map, assemblingFeatures);
     }
 
+    /**
+     * Constructs output port to read clones one by one as stream
+     */
     public OutputPort<Clone> readClones() throws IOException {
         PrimitivI input = new PrimitivI(new InputDataStream(firstClonePosition, index[0]));
         IOUtil.registerGeneReferences(input, genes, alignedFeatures);
@@ -127,12 +166,21 @@ public final class ClnAReader implements AutoCloseable {
         return new PipeDataInputReader<>(Clone.class, input, numberOfClones());
     }
 
-    public OutputPort<VDJCAlignments> alignmentsPort(int clone) throws IOException {
-        PrimitivI input = new PrimitivI(new InputDataStream(index[clone + 1], index[clone + 2]));
+    /**
+     * Constructs output port to read alignments for a specific clone
+     *
+     * @param cloneIndex index of clone
+     */
+    public OutputPort<VDJCAlignments> alignmentsPort(int cloneIndex) throws IOException {
+        PrimitivI input = new PrimitivI(new InputDataStream(index[cloneIndex + 1], index[cloneIndex + 2]));
         IOUtil.registerGeneReferences(input, genes, alignedFeatures);
-        return new PipeDataInputReader<>(VDJCAlignments.class, input, counts[clone + 1]);
+        return new PipeDataInputReader<>(VDJCAlignments.class, input, counts[cloneIndex + 1]);
     }
 
+    /**
+     * Constructs output port of CloneAlignments objects, that allows to get synchronised view on clone and it's
+     * corresponding alignments
+     */
     public OutputPort<CloneAlignments> clonesAndAlignments() throws IOException {
         PrimitivI input = new PrimitivI(new InputDataStream(firstClonePosition, index[0]));
         IOUtil.registerGeneReferences(input, genes, alignedFeatures);
@@ -154,7 +202,13 @@ public final class ClnAReader implements AutoCloseable {
         };
     }
 
+    /**
+     * Clone and alignments it was formed form
+     */
     public final class CloneAlignments {
+        /**
+         * Clone
+         */
         public final Clone clone;
         final int cloneId;
 
@@ -163,6 +217,9 @@ public final class ClnAReader implements AutoCloseable {
             this.cloneId = cloneId;
         }
 
+        /**
+         * Alignments
+         */
         public OutputPort<VDJCAlignments> alignments() throws IOException {
             return alignmentsPort(cloneId);
         }
@@ -173,6 +230,13 @@ public final class ClnAReader implements AutoCloseable {
         channel.close();
     }
 
+    /**
+     * FileChannel -> DataInput adapter that can be constructed for an arbitrary file position.
+     *
+     * Implemented using ByteBuffer.
+     *
+     * Thread-unsafe.
+     */
     private class InputDataStream implements DataInput {
         private final long to;
         private final ByteBuffer buffer;
@@ -180,37 +244,70 @@ public final class ClnAReader implements AutoCloseable {
 
         InputDataStream(long from, long to) throws IOException {
             this.to = to;
-            this.buffer = ByteBuffer.allocate(chunk);
+            this.buffer = ByteBuffer.allocate(chunkSize);
             this.lastPosition = from;
-            fillBuffer(true);
+
+            // Initially buffer is empty
+            this.buffer.limit(0);
+
+            // Filling first chunk of data
+            fillBuffer();
         }
 
-        void fillBuffer(boolean first) throws IOException {
-            int size = (int) Math.min(chunk, to - lastPosition);
-            buffer.position(chunk - size);
-            int read = channel.read(buffer, first
-                    ? lastPosition
-                    : lastPosition - buffer.remaining());
-            buffer.position(chunk - size);
+        void fillBuffer() throws IOException {
+            // Number of bytes to read from file
+            int size = (int) Math.min(chunkSize - buffer.remaining(), to - lastPosition);
+
+            // Checking state
+            if (size == 0)
+                throw new IllegalArgumentException("No more bytes.");
+
+            // Saving remaining bytes
+            ByteBuffer remaining = buffer.slice();
+
+            // Reset buffer state
+            buffer.flip();
+
+            // Setting new limit
+            buffer.limit(size + remaining.limit());
+
+            // Transferring remaining buffer bytes
+            buffer.put(remaining);
+
+            // Reading content form file
+            int read = channel.read(buffer, lastPosition);
+
+            // Flipping buffer
+            buffer.flip();
+
             if (read != size)
                 throw new IOException("Wrong block positions.");
+
+            // Advancing last position
+            this.lastPosition += read;
         }
 
         void ensureBuffer(int requiredSize) throws IOException {
+            if (requiredSize > chunkSize)
+                throw new IllegalArgumentException("Can't read this many bytes.");
             if (buffer.remaining() < requiredSize)
-                fillBuffer(false);
+                fillBuffer();
         }
 
         @Override
         public void readFully(byte[] b) throws IOException {
-            ensureBuffer(b.length);
-            buffer.get(b);
+            readFully(b, 0, b.length);
         }
 
         @Override
         public void readFully(byte[] b, int off, int len) throws IOException {
-            ensureBuffer(len);
-            buffer.get(b, off, len);
+            do {
+                int l = Math.min(chunkSize, len);
+                ensureBuffer(l);
+                buffer.get(b, off, l);
+                off += l;
+                len -= l;
+            } while (len != 0);
         }
 
         @Override

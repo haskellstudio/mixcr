@@ -3,8 +3,10 @@ package com.milaboratory.mixcr.basictypes;
 import cc.redberry.pipe.CUtils;
 import cc.redberry.pipe.OutputPort;
 import com.milaboratory.mixcr.assembler.AlignmentsMappingMerger;
+import com.milaboratory.mixcr.assembler.ReadToCloneMapping;
 import com.milaboratory.mixcr.util.RunMiXCR;
 import com.milaboratory.util.TempFileManager;
+import io.repseq.core.GeneFeature;
 import io.repseq.core.VDJCLibraryRegistry;
 import org.junit.Test;
 
@@ -32,20 +34,25 @@ public class ClnAReaderTest {
         AlignmentsMappingMerger merged = new AlignmentsMappingMerger(align.resultReader(), assemble.cloneAssembler.getAssembledReadsPort());
 
         File file = TempFileManager.getTempFile();
-        ClnAWriter writer = new ClnAWriter(file, align.parameters.alignerParameters);
+        ClnAWriter writer = new ClnAWriter(file);
         writer.writeClones(assemble.cloneSet);
         writer.sortAlignments(merged, align.alignments.size());
         writer.writeAlignmentsAndIndex();
 
         writer.close();
 
-        ClnAReader reader = new ClnAReader(file.toPath(), VDJCLibraryRegistry.createDefaultRegistry());
+        ClnAReader reader = new ClnAReader(file.toPath(), VDJCLibraryRegistry.createDefaultRegistry(), 17);
 
         assertEquals(assemble.cloneSet.size(), reader.numberOfClones());
 
         for (ClnAReader.CloneAlignments c : CUtils.it(reader.clonesAndAlignments())) {
             assertEquals("" + c.cloneId, c.clone.count, count(c.alignments()));
-            CUtils.it(c.alignments()).forEach(a -> assertEquals(c.cloneId, a.getCloneIndex()));
+            assertEquals(c.cloneId, c.clone.id);
+            CUtils.it(c.alignments()).forEach(a -> {
+                assertEquals(c.cloneId, a.getCloneIndex());
+                if (a.getMappingType() == ReadToCloneMapping.MappingType.Core)
+                    assertEquals(c.clone.getFeature(GeneFeature.CDR3), a.getFeature(GeneFeature.CDR3));
+            });
         }
     }
 
