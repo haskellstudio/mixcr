@@ -215,8 +215,7 @@ public final class RunMiXCR {
                 int counter = 0;
 
                 @Override
-                public void close() {
-                }
+                public void close() {}
 
                 @Override
                 public long getNumberOfReads() {
