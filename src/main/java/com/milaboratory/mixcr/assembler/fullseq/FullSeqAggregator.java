@@ -12,6 +12,8 @@ import com.milaboratory.mixcr.basictypes.VDJCHit;
 import com.milaboratory.mixcr.basictypes.VDJCPartitionedSequence;
 import gnu.trove.impl.Constants;
 import gnu.trove.iterator.TIntIntIterator;
+import gnu.trove.list.array.TIntArrayList;
+import gnu.trove.list.array.TLongArrayList;
 import gnu.trove.map.hash.TIntIntHashMap;
 import gnu.trove.map.hash.TIntObjectHashMap;
 import gnu.trove.map.hash.TObjectIntHashMap;
@@ -37,8 +39,12 @@ final class FullSeqAggregator {
     final boolean hasV, hasJ;
     final int nLeftDummies, lengthV, assemblingFeatureLength, jOffset;
 
-    final double relativeSumQualityThreshold = 0.1;
-    final long absoluteSumQualityThreshold = 120;
+    final double minimalQualityShare = 0.1;
+    final long minimalSumQuality = 20;
+    /**
+     * Even if other criteria are not met, but sum quality reaches this threshold, variant is marked as significant.
+     */
+    final long decisiveSumQualityThreshold = 120;
 
     FullSeqAggregator(Clone clone) {
         this.clone = clone;
@@ -92,6 +98,95 @@ final class FullSeqAggregator {
         for (int i = 0; i < data.points.length; ++i) {
 
         }
+    }
+
+    private static int ABSENT_PACKED_VARIANT_INFO = -1;
+
+    private byte getQuality(int packedVariantInfo) {
+        return (byte) (0xFF & packedVariantInfo);
+    }
+
+    private int getVariantId(int packedVariantInfo) {
+        return packedVariantInfo >>> 8;
+    }
+
+    private int packPointVariantInfo(int variantId, byte quality) {
+        return variantId << 8 | quality;
+    }
+
+    private static class VariantBranch {
+        final TIntArrayList pointStates = new TIntArrayList();
+        final BitSet reads = new BitSet();
+    }
+
+    private static class Variant {
+        final int variantInfo;
+        final BitSet reads;
+
+        public Variant(int variantInfo, BitSet reads) {
+            this.variantInfo = variantInfo;
+            this.reads = reads;
+        }
+    }
+
+    private Variant[] callVariants(int[] pointVariantInfos, BitSet targetReads) {
+        // Pre-calculating number of present variants
+        int count = 0;
+        for (int readId = targetReads.nextSetBit(0);
+             readId >= 0;
+             readId = targetReads.nextSetBit(readId + 1)) {
+            if (pointVariantInfos[readId] != ABSENT_PACKED_VARIANT_INFO)
+                ++count;
+        }
+
+        long totalSumQuality = 0;
+
+        // Sorting to GroupBy variantId
+        long[] targets = new long[count];
+        int i = 0;
+        for (int readId = targetReads.nextSetBit(0);
+             readId >= 0;
+             readId = targetReads.nextSetBit(readId + 1)) {
+            if (pointVariantInfos[readId] != ABSENT_PACKED_VARIANT_INFO) {
+                targets[i++] = ((long) pointVariantInfos[readId]) << 32 | readId;
+                totalSumQuality += 0xFF & pointVariantInfos[readId];
+            }
+        }
+        Arrays.sort(targets);
+
+        // Collecting measures for each variant
+        int blockBegin = 0;
+        int currentVariant = (int) (targets[blockBegin] >>> 40);
+        int currentIndex = 0;
+        long variantSumQuality = 0;
+        TLongArrayList unassignedVariants = new TLongArrayList();
+
+        int bestVariant = -1;
+        int bestVariantSumQuality = -1;
+
+        do {
+            if (currentIndex == count || currentVariant != (int) (targets[currentIndex] >>> 40)) {
+                if ((variantSumQuality >= minimalSumQuality
+                        && variantSumQuality >= minimalQualityShare * totalSumQuality)
+                        || variantSumQuality >= decisiveSumQualityThreshold) {
+                    // Variant is significant
+                    BitSet reads = new BitSet();
+                    for (int j = currentIndex - 1; j >= blockBegin; --j) {
+                        reads.set((int) targets[j]);
+                    }
+                } else {
+                    // Variant is not significant
+
+                }
+
+                variantSumQuality = (0xFF & (targets[currentIndex] >>> 32));
+                blockBegin = currentIndex;
+                currentVariant = (int) (targets[blockBegin] >>> 40);
+            } else
+                variantSumQuality += (0xFF & (targets[currentIndex] >>> 32));
+        } while (currentIndex >= count);
+
+        // todo more intelligent non-significant variants distribution
     }
 
     final TObjectIntHashMap<NucleotideSequence> possibleSequences
@@ -169,6 +264,7 @@ final class FullSeqAggregator {
 
         int[] coverageArray = Arrays.stream(forSort).mapToInt(l -> (int) ((-l) >> 32)).toArray();
 
+        //
         int[][] packedData = new int[pointsArray.length][nAlignments];
         for (int[] aPackedData : packedData)
             Arrays.fill(aPackedData, -1);
@@ -204,7 +300,8 @@ final class FullSeqAggregator {
         // array[readId] = (variantId << 8) | minQuality
         abstract OutputPort<int[]> createPort();
 
-        void destroy() {}
+        void destroy() {
+        }
 
         @Override
         public String toString() {
@@ -241,7 +338,6 @@ final class FullSeqAggregator {
                 alSeq2RangeIntersection = alSeq2Range.intersection(seq2Range),
                 alSeq1RangeIntersection = alignments.convertToSeq1Range(alSeq2RangeIntersection);
 
-        assert alSeq2RangeIntersection != null;
         assert alSeq1RangeIntersection != null;
 
         int shift;
