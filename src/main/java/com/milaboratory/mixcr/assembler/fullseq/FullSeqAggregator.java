@@ -87,6 +87,13 @@ final class FullSeqAggregator {
             this.jOffset = 0;
     }
 
+    void main(PreparedData data) {
+        OutputPort<int[]> port = data.createPort();
+        for (int i = 0; i < data.points.length; ++i) {
+
+        }
+    }
+
     final TObjectIntHashMap<NucleotideSequence> possibleSequences
             = new TObjectIntHashMap<>(Constants.DEFAULT_CAPACITY, Constants.DEFAULT_LOAD_FACTOR, -1);
 
