@@ -72,7 +72,7 @@ final class FullSeqAggregator {
             GeneFeature vFeature = vHit.getAlignedFeature();
             VDJCGene gene = vHit.getGene();
             this.lengthV =
-                    gene.getFeature(vFeature).size()
+                    gene.getPartitioning().getLength(vFeature)
                             - gene.getFeature(GeneFeature.intersection(assemblingFeature, vFeature)).size();
         } else
             this.lengthV = 0;
@@ -82,7 +82,7 @@ final class FullSeqAggregator {
         if (hasJ) {
             VDJCHit jHit = clone.getBestHit(Joining);
             VDJCGene gene = jHit.getGene();
-            this.jOffset = gene.getPartitioning().getPosition(assemblingFeature.getLastPoint());
+            this.jOffset = gene.getPartitioning().getRelativePosition(jHit.getAlignedFeature(), assemblingFeature.getLastPoint());
         } else
             this.jOffset = 0;
     }
@@ -102,7 +102,6 @@ final class FullSeqAggregator {
         for (VDJCAlignments al : CUtils.it(alignments.get())) {
             ++nAlignments;
             for (PointSequence point : convertToPointSequences(al)) {
-
                 int seqIndex;
                 if (point.sequence.size() == 0)
                     seqIndex = NucleotideSequence.ALPHABET.basicSize();
@@ -178,7 +177,6 @@ final class FullSeqAggregator {
             i++;
         }
 
-        System.out.println(possibleSequences);
         return new PreparedData(pointsArray, coverageArray) {
             @Override
             OutputPort<int[]> createPort() {
@@ -210,14 +208,13 @@ final class FullSeqAggregator {
         }
     }
 
-
     static final class VariantAggregator {
         long sumQuality = 0;
         int count = 0;
     }
 
     PointSequence[] convertToPointSequences(VDJCAlignments alignments) {
-        return IntStream.range(0, alignments.getNumberOfReads())
+        return IntStream.range(0, alignments.numberOfTargets())
                 .mapToObj(i -> convertToPointSequences(alignments, i))
                 .flatMap(Collection::stream)
                 .collect(Collectors.groupingBy(s -> s.point))
@@ -319,9 +316,10 @@ final class FullSeqAggregator {
                         jHitOpt.get(),
                         targetSeq,
                         new Range(rightStart, targetSeq.size()),
-                        nLeftDummies + lengthV + assemblingFeatureLength);
+                        nLeftDummies + lengthV + assemblingFeatureLength - jOffset);
             } else
                 convertToPointSequences(points, targetSeq, new Range(rightStart, targetSeq.size()), nLeftDummies + lengthV + assemblingFeatureLength - rightStart);
+
         } else if (hasV && vHitOpt.isPresent())
             convertToPointSequences(points,
                     vHitOpt.get(),
@@ -333,7 +331,7 @@ final class FullSeqAggregator {
                     jHitOpt.get(),
                     targetSeq,
                     new Range(jHitOpt.get().getSequence2Range().getFrom(), targetSeq.size()),
-                    nLeftDummies + lengthV + assemblingFeatureLength);
+                    nLeftDummies + lengthV + assemblingFeatureLength - jOffset);
 
         return points;
     }

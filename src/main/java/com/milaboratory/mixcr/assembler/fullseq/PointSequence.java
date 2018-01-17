@@ -10,6 +10,7 @@ final class PointSequence {
     final NSequenceWithQuality sequence;
 
     PointSequence(int point, NSequenceWithQuality sequence) {
+        assert point >= 0;
         this.point = point;
         this.sequence = sequence;
     }
