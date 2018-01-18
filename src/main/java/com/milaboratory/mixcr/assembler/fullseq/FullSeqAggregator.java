@@ -3,7 +3,7 @@ package com.milaboratory.mixcr.assembler.fullseq;
 import cc.redberry.pipe.CUtils;
 import cc.redberry.pipe.OutputPort;
 import com.milaboratory.core.Range;
-import com.milaboratory.core.alignment.Alignment;
+import com.milaboratory.core.alignment.*;
 import com.milaboratory.core.sequence.NSequenceWithQuality;
 import com.milaboratory.core.sequence.NSequenceWithQualityBuilder;
 import com.milaboratory.core.sequence.NucleotideSequence;
@@ -38,7 +38,7 @@ final class FullSeqAggregator {
     final GeneFeature assemblingFeature;
     final VDJCGenes genes;
     final boolean hasV, hasJ;
-    final int nLeftDummies, lengthV, assemblingFeatureLength, jOffset;
+    final int nLeftDummies, lengthV, assemblingFeatureLength, jOffset, jLength;
 
     final double minimalQualityShare = 0.1;
     final long minimalSumQuality = 20;
@@ -54,6 +54,10 @@ final class FullSeqAggregator {
     final TIntObjectHashMap<NucleotideSequence> variantIdToSequence = new TIntObjectHashMap<>();
 
     FullSeqAggregator(Clone clone, CloneFactoryParameters cloneFactoryParameters) {
+        if (cloneFactoryParameters.getVParameters().getScoring() instanceof AffineGapAlignmentScoring
+                || cloneFactoryParameters.getJParameters().getScoring() instanceof AffineGapAlignmentScoring)
+            throw new IllegalArgumentException("Do not support Affine Gap Alignment Scoring.");
+
         this.clone = clone;
         this.cloneFactoryParameters = cloneFactoryParameters;
         GeneFeature[] assemblingFeatures = clone.getAssemblingFeatures();
@@ -97,8 +101,11 @@ final class FullSeqAggregator {
             VDJCHit jHit = clone.getBestHit(Joining);
             VDJCGene gene = jHit.getGene();
             this.jOffset = gene.getPartitioning().getRelativePosition(jHit.getAlignedFeature(), assemblingFeature.getLastPoint());
-        } else
+            this.jLength = gene.getPartitioning().getLength(jHit.getAlignedFeature()) - jOffset;
+        } else {
             this.jOffset = 0;
+            this.jLength = 0;
+        }
     }
 
     Clone[] process(PreparedData data) {
@@ -123,6 +130,77 @@ final class FullSeqAggregator {
 
 
         return null;
+    }
+
+    Clone buildClone(AssembledSequences targets) {
+        Alignment<NucleotideSequence>[] vTopHitAlignments = new Alignment[targets.ranges.length],
+                jTopHitAlignments = new Alignment[targets.ranges.length];
+        VDJCHit hit = clone.getBestHit(Variable);
+        NucleotideSequence vTopReferenceSequence = hit == null
+                ? null
+                : hit.getGene().getFeature(hit.getAlignedFeature());
+        hit = clone.getBestHit(Joining);
+        NucleotideSequence jTopReferenceSequence = hit == null
+                ? null
+                : hit.getGene().getFeature(hit.getAlignedFeature());
+
+
+        for (int i = 0; i < targets.ranges.length; i++) {
+            Range range = targets.ranges[i];
+            NucleotideSequence sequence = targets.sequences[i].getSequence();
+
+            if (range.getTo() < nLeftDummies + lengthV || i == targets.assemblingFeatureTargetId) {
+                int offset1 = range.getFrom() - nLeftDummies;
+                int length1 = range.length();
+
+                int offset2 = 0;
+                int length2 = sequence.size();
+
+                if (offset1 < 0) {
+                    length1 += offset1;
+                    offset1 = 0;
+                }
+
+                if (range.getFrom() < nLeftDummies || i == 0)
+                    vTopHitAlignments[i] = AlignerCustom.alignLinearSemiLocalRight0(
+                            ((LinearGapAlignmentScoring<NucleotideSequence>) cloneFactoryParameters.getVParameters().getScoring()),
+                            vTopReferenceSequence, sequence.getSequence(),
+                            offset1, length1,
+                            offset2, length2,
+                            false, false,
+                            NucleotideSequence.ALPHABET,
+                            new AlignerCustom.LinearMatrixCache());
+                else
+                    vTopHitAlignments[i] = Aligner.alignGlobal(
+                            cloneFactoryParameters.getVParameters().getScoring(),
+                            vTopReferenceSequence,
+                            sequence,
+                            offset1, length1,
+                            offset2, length2);
+            } else if (range.getFrom() >= nLeftDummies + lengthV + assemblingFeatureLength
+                    && range.getTo() < nLeftDummies + lengthV + assemblingFeatureLength + jLength) {
+                Alignment<NucleotideSequence> al = Aligner.alignGlobal(
+                        cloneFactoryParameters.getJParameters().getScoring(),
+                        jTopReferenceSequence.getRange(range.move(jOffset - (nLeftDummies + lengthV + assemblingFeatureLength))),
+                        sequence.getSequence());
+                jTopHitAlignments[i] = new Alignment<>(
+                        jTopReferenceSequence,
+                        al.getAbsoluteMutations().move(range.getFrom() + jOffset - (nLeftDummies + lengthV + assemblingFeatureLength)),
+                        al.getScore());
+            } else if (range.getFrom() >= nLeftDummies + lengthV + assemblingFeatureLength) {
+                jTopHitAlignments[i] = AlignerCustom.alignLinearSemiLocalLeft0(
+                        ((LinearGapAlignmentScoring<NucleotideSequence>) cloneFactoryParameters.getJParameters().getScoring()),
+                        jTopReferenceSequence, sequence.getSequence(),
+                        range.getFrom() + jOffset - (nLeftDummies + lengthV + assemblingFeatureLength),
+                        jTopReferenceSequence.size() - (range.getFrom() + jOffset - (nLeftDummies + lengthV + assemblingFeatureLength)),
+                        0, sequence.size(),
+                        false, false,
+                        NucleotideSequence.ALPHABET,
+                        new AlignerCustom.LinearMatrixCache());
+            }
+
+            targets.
+        }
     }
 
     AssembledSequences assembleSequences(int[] points, VariantBranch branch) {
@@ -157,8 +235,10 @@ final class FullSeqAggregator {
         }
 
         int assemblingFeatureTargetId = -1;
+        int assemblingFeatureOffset = -1;
         for (int i = 0; i < ranges.size(); i++) {
             if (ranges.get(i).getTo() == nLeftDummies + lengthV) {
+                assemblingFeatureOffset = sequences.get(i).size();
                 if (i < ranges.size() - 1
                         && ranges.get(i + 1).getFrom() == nLeftDummies + lengthV + assemblingFeatureLength) {
                     // seq[i]-AssemblingFeature-seq[i+1]
@@ -179,6 +259,7 @@ final class FullSeqAggregator {
                 // AssemblingFeature-seq[i]
                 ranges.set(i, new Range(nLeftDummies + lengthV, ranges.get(i).getTo()));
                 sequences.set(i, clone.getTarget(0).concatenate(sequences.get(i)));
+                assemblingFeatureOffset = 0;
                 assemblingFeatureTargetId = i;
                 break;
             }
@@ -187,6 +268,7 @@ final class FullSeqAggregator {
                 // seq[i-1]    AssemblingFeature    seq[i]
                 ranges.add(i, new Range(nLeftDummies + lengthV, nLeftDummies + lengthV + assemblingFeatureLength));
                 sequences.add(i, clone.getTarget(0));
+                assemblingFeatureOffset = 0;
                 assemblingFeatureTargetId = i;
                 break;
             }
@@ -196,11 +278,13 @@ final class FullSeqAggregator {
             // seq[last]   AssemblingFeature
             ranges.add(new Range(nLeftDummies + lengthV, nLeftDummies + lengthV + assemblingFeatureLength));
             sequences.add(clone.getTarget(0));
+            assemblingFeatureOffset = 0;
             assemblingFeatureTargetId = ranges.size() - 1;
         }
 
         return new AssembledSequences(
                 assemblingFeatureTargetId,
+                assemblingFeatureOffset,
                 ranges.toArray(new Range[ranges.size()]),
                 sequences.toArray(new NSequenceWithQuality[sequences.size()]));
     }
@@ -211,11 +295,13 @@ final class FullSeqAggregator {
 
     private final class AssembledSequences {
         final int assemblingFeatureTargetId;
+        final int assemblingFeatureOffset;
         final Range[] ranges;
         final NSequenceWithQuality[] sequences;
 
-        public AssembledSequences(int assemblingFeatureTargetId, Range[] ranges, NSequenceWithQuality[] sequences) {
+        public AssembledSequences(int assemblingFeatureTargetId, int assemblingFeatureOffset, Range[] ranges, NSequenceWithQuality[] sequences) {
             this.assemblingFeatureTargetId = assemblingFeatureTargetId;
+            this.assemblingFeatureOffset = assemblingFeatureOffset;
             this.ranges = ranges;
             this.sequences = sequences;
         }
