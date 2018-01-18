@@ -5,15 +5,16 @@ import cc.redberry.pipe.OutputPort;
 import com.milaboratory.core.Range;
 import com.milaboratory.core.alignment.Alignment;
 import com.milaboratory.core.sequence.NSequenceWithQuality;
+import com.milaboratory.core.sequence.NSequenceWithQualityBuilder;
 import com.milaboratory.core.sequence.NucleotideSequence;
+import com.milaboratory.core.sequence.SequenceQuality;
+import com.milaboratory.mixcr.assembler.CloneFactoryParameters;
 import com.milaboratory.mixcr.basictypes.Clone;
 import com.milaboratory.mixcr.basictypes.VDJCAlignments;
 import com.milaboratory.mixcr.basictypes.VDJCHit;
 import com.milaboratory.mixcr.basictypes.VDJCPartitionedSequence;
 import gnu.trove.impl.Constants;
 import gnu.trove.iterator.TIntIntIterator;
-import gnu.trove.list.array.TIntArrayList;
-import gnu.trove.list.array.TLongArrayList;
 import gnu.trove.map.hash.TIntIntHashMap;
 import gnu.trove.map.hash.TIntObjectHashMap;
 import gnu.trove.map.hash.TObjectIntHashMap;
@@ -46,8 +47,15 @@ final class FullSeqAggregator {
      */
     final long decisiveSumQualityThreshold = 120;
 
-    FullSeqAggregator(Clone clone) {
+    final CloneFactoryParameters cloneFactoryParameters;
+
+    final TObjectIntHashMap<NucleotideSequence> sequenceToVariantId
+            = new TObjectIntHashMap<>(Constants.DEFAULT_CAPACITY, Constants.DEFAULT_LOAD_FACTOR, -1);
+    final TIntObjectHashMap<NucleotideSequence> variantIdToSequence = new TIntObjectHashMap<>();
+
+    FullSeqAggregator(Clone clone, CloneFactoryParameters cloneFactoryParameters) {
         this.clone = clone;
+        this.cloneFactoryParameters = cloneFactoryParameters;
         GeneFeature[] assemblingFeatures = clone.getAssemblingFeatures();
         if (assemblingFeatures.length != 1)
             throw new IllegalArgumentException();
@@ -93,10 +101,123 @@ final class FullSeqAggregator {
             this.jOffset = 0;
     }
 
-    void main(PreparedData data) {
+    Clone[] process(PreparedData data) {
         OutputPort<int[]> port = data.createPort();
+        List<VariantBranch> branches = new ArrayList<>();
+        BitSet allReads = new BitSet();
+        allReads.set(0, data.nReads);
+        branches.add(new VariantBranch(clone.getCount(), allReads));
         for (int i = 0; i < data.points.length; ++i) {
+            int[] variantInfos = port.take();
+            List<VariantBranch> newBranches = new ArrayList<>();
+            for (VariantBranch branch : branches) {
+                List<Variant> variants = callVariants(variantInfos, branch.reads);
+                int sumSignificant = 0;
+                for (Variant variant : variants)
+                    sumSignificant += variant.nSignificant;
+                for (Variant variant : variants)
+                    newBranches.add(branch.addVariant(variant, sumSignificant));
+            }
+            branches = newBranches;
+        }
 
+
+        return null;
+    }
+
+    AssembledSequences assembleSequences(int[] points, VariantBranch branch) {
+        long[] positionedStates = new long[points.length];
+        for (int i = 0; i < points.length; i++)
+            positionedStates[i] = ((long) points[i]) << 32 | branch.pointStates[i];
+        Arrays.sort(positionedStates);
+
+        List<NSequenceWithQuality> sequences = new ArrayList<>();
+        List<Range> ranges = new ArrayList<>();
+        NSequenceWithQualityBuilder sequenceBuilder = new NSequenceWithQualityBuilder();
+        int blockStartPosition = extractPosition(positionedStates[0]);
+        for (int i = 0; i < positionedStates.length; ++i) {
+            int currentPosition = extractPosition(positionedStates[i]);
+            int nextPosition = i == positionedStates.length - 1
+                    ? Integer.MAX_VALUE
+                    : extractPosition(positionedStates[i + 1]);
+
+            assert currentPosition != nextPosition;
+
+            sequenceBuilder.append(
+                    new NSequenceWithQuality(
+                            variantIdToSequence.get((int) (positionedStates[i] >>> 8)),
+                            (byte) positionedStates[i]));
+
+            if (currentPosition != nextPosition - 1) {
+                sequences.add(sequenceBuilder.createAndDestroy());
+                ranges.add(new Range(blockStartPosition, currentPosition + 1));
+                sequenceBuilder = new NSequenceWithQualityBuilder();
+                blockStartPosition = nextPosition;
+            }
+        }
+
+        int assemblingFeatureTargetId = -1;
+        for (int i = 0; i < ranges.size(); i++) {
+            if (ranges.get(i).getTo() == nLeftDummies + lengthV) {
+                if (i < ranges.size() - 1
+                        && ranges.get(i + 1).getFrom() == nLeftDummies + lengthV + assemblingFeatureLength) {
+                    // seq[i]-AssemblingFeature-seq[i+1]
+                    ranges.set(i, new Range(ranges.get(i).getFrom(), ranges.get(i + 1).getTo()));
+                    ranges.remove(i + 1);
+                    sequences.set(i, sequences.get(i).concatenate(clone.getTarget(0)).concatenate(sequences.get(i + 1)));
+                    sequences.remove(i + 1);
+                } else {
+                    // seq[i]-AssemblingFeature
+                    ranges.set(i, new Range(ranges.get(i).getFrom(), nLeftDummies + lengthV + assemblingFeatureLength));
+                    sequences.set(i, sequences.get(i).concatenate(clone.getTarget(0)));
+                }
+                assemblingFeatureTargetId = i;
+                break;
+            }
+
+            if (ranges.get(i).getFrom() == nLeftDummies + lengthV + assemblingFeatureLength) {
+                // AssemblingFeature-seq[i]
+                ranges.set(i, new Range(nLeftDummies + lengthV, ranges.get(i).getTo()));
+                sequences.set(i, clone.getTarget(0).concatenate(sequences.get(i)));
+                assemblingFeatureTargetId = i;
+                break;
+            }
+
+            if (ranges.get(i).getFrom() > nLeftDummies + lengthV + assemblingFeatureLength) {
+                // seq[i-1]    AssemblingFeature    seq[i]
+                ranges.add(i, new Range(nLeftDummies + lengthV, nLeftDummies + lengthV + assemblingFeatureLength));
+                sequences.add(i, clone.getTarget(0));
+                assemblingFeatureTargetId = i;
+                break;
+            }
+        }
+
+        if (assemblingFeatureTargetId == -1) {
+            // seq[last]   AssemblingFeature
+            ranges.add(new Range(nLeftDummies + lengthV, nLeftDummies + lengthV + assemblingFeatureLength));
+            sequences.add(clone.getTarget(0));
+            assemblingFeatureTargetId = ranges.size() - 1;
+        }
+
+        return new AssembledSequences(
+                assemblingFeatureTargetId,
+                ranges.toArray(new Range[ranges.size()]),
+                sequences.toArray(new NSequenceWithQuality[sequences.size()]));
+    }
+
+    private static int extractPosition(long positionedState) {
+        return (int) (positionedState >>> 32);
+    }
+
+    private final class AssembledSequences {
+        final int assemblingFeatureTargetId;
+        final Range[] ranges;
+        final NSequenceWithQuality[] sequences;
+
+        public AssembledSequences(int assemblingFeatureTargetId, Range[] ranges, NSequenceWithQuality[] sequences) {
+            this.assemblingFeatureTargetId = assemblingFeatureTargetId;
+            this.ranges = ranges;
+            this.sequences = sequences;
         }
     }
 
@@ -115,21 +236,40 @@ final class FullSeqAggregator {
     }
 
     private static class VariantBranch {
-        final TIntArrayList pointStates = new TIntArrayList();
-        final BitSet reads = new BitSet();
+        final double count;
+        final int[] pointStates;
+        final BitSet reads;
+
+        public VariantBranch(double count, BitSet reads) {
+            this(count, new int[0], reads);
+        }
+
+        public VariantBranch(double count, int[] pointStates, BitSet reads) {
+            this.count = count;
+            this.pointStates = pointStates;
+            this.reads = reads;
+        }
+
+        public VariantBranch addVariant(Variant variant, int sumSignificant) {
+            int[] newStates = Arrays.copyOf(pointStates, pointStates.length + 1);
+            newStates[newStates.length - 1] = variant.variantInfo;
+            return new VariantBranch(count * variant.nSignificant / sumSignificant, newStates, variant.reads);
+        }
     }
 
     private static class Variant {
         final int variantInfo;
         final BitSet reads;
+        final int nSignificant;
 
-        public Variant(int variantInfo, BitSet reads) {
+        public Variant(int variantInfo, BitSet reads, int nSignificant) {
             this.variantInfo = variantInfo;
             this.reads = reads;
+            this.nSignificant = nSignificant;
         }
     }
 
-    private Variant[] callVariants(int[] pointVariantInfos, BitSet targetReads) {
+    private List<Variant> callVariants(int[] pointVariantInfos, BitSet targetReads) {
         // Pre-calculating number of present variants
         int count = 0;
         for (int readId = targetReads.nextSetBit(0);
@@ -138,6 +278,11 @@ final class FullSeqAggregator {
             if (pointVariantInfos[readId] != ABSENT_PACKED_VARIANT_INFO)
                 ++count;
         }
+
+        // List of readIds of reads that either:
+        //   - don't cover this point
+        //   - has insignificant variant in this position
+        BitSet unassignedVariants = new BitSet();
 
         long totalSumQuality = 0;
 
@@ -150,7 +295,8 @@ final class FullSeqAggregator {
             if (pointVariantInfos[readId] != ABSENT_PACKED_VARIANT_INFO) {
                 targets[i++] = ((long) pointVariantInfos[readId]) << 32 | readId;
                 totalSumQuality += 0xFF & pointVariantInfos[readId];
-            }
+            } else
+                unassignedVariants.set(readId);
         }
         Arrays.sort(targets);
 
@@ -159,43 +305,75 @@ final class FullSeqAggregator {
         int currentVariant = (int) (targets[blockBegin] >>> 40);
         int currentIndex = 0;
         long variantSumQuality = 0;
-        TLongArrayList unassignedVariants = new TLongArrayList();
 
+        // Will be used if no significant variant is found
         int bestVariant = -1;
         int bestVariantSumQuality = -1;
 
+        ArrayList<Variant> variants = new ArrayList<>();
+
         do {
-            if (currentIndex == count || currentVariant != (int) (targets[currentIndex] >>> 40)) {
+            if (currentIndex == count
+                    || currentVariant != (int) (targets[currentIndex] >>> 40)) {
+
+                // Checking significance conditions
                 if ((variantSumQuality >= minimalSumQuality
                         && variantSumQuality >= minimalQualityShare * totalSumQuality)
                         || variantSumQuality >= decisiveSumQualityThreshold) {
                     // Variant is significant
                     BitSet reads = new BitSet();
-                    for (int j = currentIndex - 1; j >= blockBegin; --j) {
+                    for (int j = currentIndex - 1; j >= blockBegin; --j)
                         reads.set((int) targets[j]);
-                    }
+                    variants.add(new Variant((currentVariant << 8) | (int) Math.min(SequenceQuality.MAX_QUALITY_VALUE, variantSumQuality),
+                            reads, currentIndex - blockBegin));
                 } else {
                     // Variant is not significant
-
+                    for (int j = currentIndex - 1; j >= blockBegin; --j)
+                        unassignedVariants.set((int) targets[j]);
+                    if (variantSumQuality > bestVariantSumQuality) {
+                        bestVariant = currentVariant;
+                        // totalSumQuality is definitely less than Long because variantSumQuality < decisiveSumQualityThreshold
+                        bestVariantSumQuality = (int) totalSumQuality;
+                    }
                 }
 
-                variantSumQuality = (0xFF & (targets[currentIndex] >>> 32));
-                blockBegin = currentIndex;
-                currentVariant = (int) (targets[blockBegin] >>> 40);
+                if (currentIndex != count) {
+                    variantSumQuality = (0xFF & (targets[currentIndex] >>> 32));
+                    blockBegin = currentIndex;
+                    currentVariant = (int) (targets[blockBegin] >>> 40);
+                }
             } else
                 variantSumQuality += (0xFF & (targets[currentIndex] >>> 32));
-        } while (currentIndex >= count);
+        } while (++currentIndex <= count);
 
-        // todo more intelligent non-significant variants distribution
+        if (variants.isEmpty()) {
+            assert bestVariant != -1;
+            BitSet reads = new BitSet();
+            for (int j = 0; j < targets.length; j++)
+                reads.set((int) targets[j]);
+            // nSignificant = 1 (will not be practically used, only one variant, don't care)
+            return Collections.singletonList(
+                    new Variant(
+                            bestVariant << 8 | Math.min(SequenceQuality.MAX_QUALITY_VALUE, bestVariantSumQuality),
+                            reads, 1));
+        } else {
+            for (Variant variant : variants)
+                variant.reads.or(unassignedVariants);
+            return variants;
+        }
     }
 
-    final TObjectIntHashMap<NucleotideSequence> possibleSequences
-            = new TObjectIntHashMap<>(Constants.DEFAULT_CAPACITY, Constants.DEFAULT_LOAD_FACTOR, -1);
-
     PreparedData initialRound(Supplier<OutputPort<VDJCAlignments>> alignments) {
-        for (byte letter = 0; letter < NucleotideSequence.ALPHABET.basicSize(); letter++)
-            possibleSequences.put(new NucleotideSequence(new byte[]{letter}), letter);
-        possibleSequences.put(NucleotideSequence.EMPTY, NucleotideSequence.ALPHABET.basicSize());
+        if (!sequenceToVariantId.isEmpty())
+            throw new IllegalStateException();
+
+        for (byte letter = 0; letter < NucleotideSequence.ALPHABET.basicSize(); letter++) {
+            NucleotideSequence seq = new NucleotideSequence(new byte[]{letter});
+            sequenceToVariantId.put(seq, letter);
+            variantIdToSequence.put(letter, seq);
+        }
+        sequenceToVariantId.put(NucleotideSequence.EMPTY, NucleotideSequence.ALPHABET.basicSize());
+        variantIdToSequence.put(NucleotideSequence.ALPHABET.basicSize(), NucleotideSequence.EMPTY);
 
         TIntIntHashMap coverage = new TIntIntHashMap();
         TIntObjectHashMap<TIntObjectHashMap<VariantAggregator>> variants = new TIntObjectHashMap<>();
@@ -210,9 +388,11 @@ final class FullSeqAggregator {
                 else if (point.sequence.size() == 1)
                     seqIndex = point.sequence.getSequence().codeAt(0);
                 else {
-                    seqIndex = possibleSequences.putIfAbsent(point.sequence.getSequence(), possibleSequences.size());
-                    if (seqIndex == -1)
-                        seqIndex = possibleSequences.size() - 1;
+                    seqIndex = sequenceToVariantId.putIfAbsent(point.sequence.getSequence(), sequenceToVariantId.size());
+                    if (seqIndex == -1) {
+                        seqIndex = sequenceToVariantId.size() - 1;
+                        variantIdToSequence.put(seqIndex, point.sequence.getSequence());
+                    }
                 }
 
                 coverage.adjustOrPutValue(point.point, 1, 1);
@@ -230,24 +410,6 @@ final class FullSeqAggregator {
             }
         }
 
-        /*TIntObjectIterator<TIntObjectHashMap<VariantAggregator>> iterator = variants.iterator();
-        while (iterator.hasNext()) {
-            iterator.advance();
-
-            int point = iterator.key();
-            TIntObjectHashMap<VariantAggregator> vars = iterator.value();
-            long totalQuality = vars.valueCollection().stream().mapToLong(c -> c.sumQuality).sum();
-            if (vars.size() > 1) {
-                TIntObjectIterator<VariantAggregator> it = vars.iterator();
-                while (it.hasNext()) {
-                    it.advance();
-                    if (it.value().sumQuality < absoluteSumQualityThreshold
-                            && 1.0 * it.value().sumQuality / totalQuality < relativeSumQualityThreshold)
-                        it.remove();
-                }
-            }
-        }*/
-
         long[] forSort = new long[coverage.size()];
         TIntIntIterator iterator = coverage.iterator();
         int i = 0;
@@ -264,7 +426,6 @@ final class FullSeqAggregator {
 
         int[] coverageArray = Arrays.stream(forSort).mapToInt(l -> (int) ((-l) >> 32)).toArray();
 
-        //
         int[][] packedData = new int[pointsArray.length][nAlignments];
         for (int[] aPackedData : packedData)
             Arrays.fill(aPackedData, -1);
@@ -274,13 +435,13 @@ final class FullSeqAggregator {
             for (PointSequence point : convertToPointSequences(al)) {
                 int pointIndex = revIndex.get(point.point);
                 packedData[pointIndex][i] =
-                        (possibleSequences.get(point.sequence.getSequence()) << 8)
+                        (sequenceToVariantId.get(point.sequence.getSequence()) << 8)
                                 | point.sequence.getQuality().minValue();
             }
             i++;
         }
 
-        return new PreparedData(pointsArray, coverageArray) {
+        return new PreparedData(nAlignments, pointsArray, coverageArray) {
             @Override
             OutputPort<int[]> createPort() {
                 return CUtils.asOutputPort(Arrays.asList(packedData));
@@ -289,10 +450,12 @@ final class FullSeqAggregator {
     }
 
     static abstract class PreparedData {
+        final int nReads;
         final int[] points;
         final int[] coverage;
 
-        PreparedData(int[] points, int[] coverage) {
+        public PreparedData(int nReads, int[] points, int[] coverage) {
+            this.nReads = nReads;
             this.points = points;
             this.coverage = coverage;
         }
