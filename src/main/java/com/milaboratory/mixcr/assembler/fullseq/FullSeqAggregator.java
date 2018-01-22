@@ -8,11 +8,11 @@ import com.milaboratory.core.sequence.NSequenceWithQuality;
 import com.milaboratory.core.sequence.NSequenceWithQualityBuilder;
 import com.milaboratory.core.sequence.NucleotideSequence;
 import com.milaboratory.core.sequence.SequenceQuality;
-import com.milaboratory.mixcr.assembler.CloneFactoryParameters;
 import com.milaboratory.mixcr.basictypes.Clone;
 import com.milaboratory.mixcr.basictypes.VDJCAlignments;
 import com.milaboratory.mixcr.basictypes.VDJCHit;
 import com.milaboratory.mixcr.basictypes.VDJCPartitionedSequence;
+import com.milaboratory.mixcr.vdjaligners.VDJCAlignerParameters;
 import gnu.trove.impl.Constants;
 import gnu.trove.iterator.TIntIntIterator;
 import gnu.trove.map.hash.TIntIntHashMap;
@@ -47,19 +47,19 @@ final class FullSeqAggregator {
      */
     final long decisiveSumQualityThreshold = 120;
 
-    final CloneFactoryParameters cloneFactoryParameters;
+    final VDJCAlignerParameters alignerParameters;
 
     final TObjectIntHashMap<NucleotideSequence> sequenceToVariantId
             = new TObjectIntHashMap<>(Constants.DEFAULT_CAPACITY, Constants.DEFAULT_LOAD_FACTOR, -1);
     final TIntObjectHashMap<NucleotideSequence> variantIdToSequence = new TIntObjectHashMap<>();
 
-    FullSeqAggregator(Clone clone, CloneFactoryParameters cloneFactoryParameters) {
-        if (cloneFactoryParameters.getVParameters().getScoring() instanceof AffineGapAlignmentScoring
-                || cloneFactoryParameters.getJParameters().getScoring() instanceof AffineGapAlignmentScoring)
+    FullSeqAggregator(Clone clone, VDJCAlignerParameters alignerParameters) {
+        if (alignerParameters.getVAlignerParameters().getScoring() instanceof AffineGapAlignmentScoring
+                || alignerParameters.getJAlignerParameters().getScoring() instanceof AffineGapAlignmentScoring)
             throw new IllegalArgumentException("Do not support Affine Gap Alignment Scoring.");
 
         this.clone = clone;
-        this.cloneFactoryParameters = cloneFactoryParameters;
+        this.alignerParameters = alignerParameters;
         GeneFeature[] assemblingFeatures = clone.getAssemblingFeatures();
         if (assemblingFeatures.length != 1)
             throw new IllegalArgumentException();
@@ -82,6 +82,8 @@ final class FullSeqAggregator {
         //  ------|--------------|--------------|------------------------>
         //        ↓              ↓              ↓
         //  0000000vvvvvvvvvvvvvvCDR3CDR3CDR3CDR3jjjjjjjjjjjjjjjjCCCCCCCCC
+        //      ------- Type A
+        //          -------- Type B
 
         this.nLeftDummies = 1024; // fixme
 
@@ -136,72 +138,188 @@ final class FullSeqAggregator {
         Alignment<NucleotideSequence>[] vTopHitAlignments = new Alignment[targets.ranges.length],
                 jTopHitAlignments = new Alignment[targets.ranges.length];
         VDJCHit hit = clone.getBestHit(Variable);
-        NucleotideSequence vTopReferenceSequence = hit == null
-                ? null
-                : hit.getGene().getFeature(hit.getAlignedFeature());
+        if (hit == null)
+            throw new UnsupportedOperationException("No V hit.");
+        NucleotideSequence vTopReferenceSequence = hit.getGene().getFeature(hit.getAlignedFeature());
         hit = clone.getBestHit(Joining);
-        NucleotideSequence jTopReferenceSequence = hit == null
-                ? null
-                : hit.getGene().getFeature(hit.getAlignedFeature());
+        if (hit == null)
+            throw new UnsupportedOperationException("No J hit.");
+        NucleotideSequence jTopReferenceSequence = hit.getGene().getFeature(hit.getAlignedFeature());
 
+        // Excessive optimization
+        AlignerCustom.LinearMatrixCache matrixCache = new AlignerCustom.LinearMatrixCache();
 
         for (int i = 0; i < targets.ranges.length; i++) {
             Range range = targets.ranges[i];
             NucleotideSequence sequence = targets.sequences[i].getSequence();
 
-            if (range.getTo() < nLeftDummies + lengthV || i == targets.assemblingFeatureTargetId) {
-                int offset1 = range.getFrom() - nLeftDummies;
-                int length1 = range.length();
+            // Params:
+            // V floatingLeftBound = true / false
+            // J floatingRightBound = true / false
 
-                int offset2 = 0;
-                int length2 = sequence.size();
+            // ...V  -  V+CDR3+J  -  J...
+            // ...V  -  VVVV  -  V+CDR3+J  -  J...
 
-                if (offset1 < 0) {
-                    length1 += offset1;
-                    offset1 = 0;
-                }
+            if (range.getTo() < nLeftDummies + lengthV) {
+                boolean floatingLeftBound =
+                        i == 0 && alignerParameters.getVAlignerParameters().getParameters().isFloatingLeftBound();
 
-                if (range.getFrom() < nLeftDummies || i == 0)
+                // Can be reduced to a single statement
+                if (range.getFrom() < nLeftDummies)
+                    // This target contain extra non-V nucleotides on the left
                     vTopHitAlignments[i] = AlignerCustom.alignLinearSemiLocalRight0(
-                            ((LinearGapAlignmentScoring<NucleotideSequence>) cloneFactoryParameters.getVParameters().getScoring()),
+                            ((LinearGapAlignmentScoring<NucleotideSequence>) alignerParameters.getVAlignerParameters().getScoring()),
                             vTopReferenceSequence, sequence.getSequence(),
-                            offset1, length1,
-                            offset2, length2,
+                            0, range.getTo() - nLeftDummies,
+                            0, sequence.size(),
+                            !floatingLeftBound, false,
+                            NucleotideSequence.ALPHABET,
+                            matrixCache);
+                else if (floatingLeftBound)
+                    vTopHitAlignments[i] = AlignerCustom.alignLinearSemiLocalRight0(
+                            ((LinearGapAlignmentScoring<NucleotideSequence>) alignerParameters.getVAlignerParameters().getScoring()),
+                            vTopReferenceSequence, sequence.getSequence(),
+                            range.getFrom() - nLeftDummies, range.length(),
+                            0, sequence.size(),
                             false, false,
                             NucleotideSequence.ALPHABET,
-                            new AlignerCustom.LinearMatrixCache());
+                            matrixCache);
                 else
                     vTopHitAlignments[i] = Aligner.alignGlobal(
-                            cloneFactoryParameters.getVParameters().getScoring(),
+                            alignerParameters.getVAlignerParameters().getScoring(),
                             vTopReferenceSequence,
                             sequence,
-                            offset1, length1,
-                            offset2, length2);
-            } else if (range.getFrom() >= nLeftDummies + lengthV + assemblingFeatureLength
-                    && range.getTo() < nLeftDummies + lengthV + assemblingFeatureLength + jLength) {
-                Alignment<NucleotideSequence> al = Aligner.alignGlobal(
-                        cloneFactoryParameters.getJParameters().getScoring(),
-                        jTopReferenceSequence.getRange(range.move(jOffset - (nLeftDummies + lengthV + assemblingFeatureLength))),
-                        sequence.getSequence());
-                jTopHitAlignments[i] = new Alignment<>(
-                        jTopReferenceSequence,
-                        al.getAbsoluteMutations().move(range.getFrom() + jOffset - (nLeftDummies + lengthV + assemblingFeatureLength)),
-                        al.getScore());
-            } else if (range.getFrom() >= nLeftDummies + lengthV + assemblingFeatureLength) {
-                jTopHitAlignments[i] = AlignerCustom.alignLinearSemiLocalLeft0(
-                        ((LinearGapAlignmentScoring<NucleotideSequence>) cloneFactoryParameters.getJParameters().getScoring()),
-                        jTopReferenceSequence, sequence.getSequence(),
-                        range.getFrom() + jOffset - (nLeftDummies + lengthV + assemblingFeatureLength),
-                        jTopReferenceSequence.size() - (range.getFrom() + jOffset - (nLeftDummies + lengthV + assemblingFeatureLength)),
-                        0, sequence.size(),
-                        false, false,
-                        NucleotideSequence.ALPHABET,
-                        new AlignerCustom.LinearMatrixCache());
-            }
+                            range.getFrom() - nLeftDummies, range.length(),
+                            0, sequence.size());
+            } else if (i == targets.assemblingFeatureTargetId) {
+                /*
+                 *  V gene
+                 */
 
-            targets.
+                boolean vFloatingLeftBound =
+                        i == 0 && alignerParameters.getVAlignerParameters().getParameters().isFloatingLeftBound();
+
+                // Can be reduced to a single statement
+                if (range.getFrom() < nLeftDummies)
+                    // This target contain extra non-V nucleotides on the left
+                    vTopHitAlignments[i] = AlignerCustom.alignLinearSemiLocalRight0(
+                            ((LinearGapAlignmentScoring<NucleotideSequence>) alignerParameters.getVAlignerParameters().getScoring()),
+                            vTopReferenceSequence, sequence.getSequence(),
+                            0, lengthV,
+                            0, targets.assemblingFeatureOffset,
+                            !vFloatingLeftBound, false,
+                            NucleotideSequence.ALPHABET,
+                            matrixCache);
+                else if (vFloatingLeftBound)
+                    vTopHitAlignments[i] = AlignerCustom.alignLinearSemiLocalRight0(
+                            ((LinearGapAlignmentScoring<NucleotideSequence>) alignerParameters.getVAlignerParameters().getScoring()),
+                            vTopReferenceSequence, sequence.getSequence(),
+                            range.getFrom() - nLeftDummies, lengthV - (range.getFrom() - nLeftDummies),
+                            0, targets.assemblingFeatureOffset,
+                            false, false,
+                            NucleotideSequence.ALPHABET,
+                            matrixCache);
+                else
+                    vTopHitAlignments[i] = Aligner.alignGlobal(
+                            alignerParameters.getVAlignerParameters().getScoring(),
+                            vTopReferenceSequence,
+                            sequence,
+                            range.getFrom() - nLeftDummies, lengthV - (range.getFrom() - nLeftDummies),
+                            0, targets.assemblingFeatureOffset);
+
+                /*
+                 *  J gene
+                 */
+
+                boolean jFloatingRightBound =
+                        i == targets.ranges.length - 1 && alignerParameters.getJAlignerParameters().getParameters().isFloatingRightBound();
+
+                if (range.getTo() >= nLeftDummies + lengthV + assemblingFeatureLength + jLength)
+                    // This target contain extra non-J nucleotides on the right
+                    jTopHitAlignments[i] = AlignerCustom.alignLinearSemiLocalLeft0(
+                            ((LinearGapAlignmentScoring<NucleotideSequence>) alignerParameters.getJAlignerParameters().getScoring()),
+                            jTopReferenceSequence, sequence.getSequence(),
+                            jOffset, jLength - jOffset,
+                            targets.assemblingFeatureOffset + assemblingFeatureLength, sequence.size() - (targets.assemblingFeatureOffset + assemblingFeatureLength),
+                            !jFloatingRightBound, false,
+                            NucleotideSequence.ALPHABET,
+                            matrixCache);
+                else if (jFloatingRightBound)
+                    jTopHitAlignments[i] = AlignerCustom.alignLinearSemiLocalLeft0(
+                            ((LinearGapAlignmentScoring<NucleotideSequence>) alignerParameters.getJAlignerParameters().getScoring()),
+                            jTopReferenceSequence, sequence.getSequence(),
+                            jOffset, range.getTo() - (nLeftDummies + lengthV + assemblingFeatureLength),
+                            targets.assemblingFeatureOffset + assemblingFeatureLength, sequence.size() - (targets.assemblingFeatureOffset + assemblingFeatureLength),
+                            false, false,
+                            NucleotideSequence.ALPHABET,
+                            matrixCache);
+                else
+                    jTopHitAlignments[i] = Aligner.alignGlobal(
+                            alignerParameters.getJAlignerParameters().getScoring(),
+                            jTopReferenceSequence,
+                            sequence,
+                            jOffset, range.getTo() - (nLeftDummies + lengthV + assemblingFeatureLength),
+                            targets.assemblingFeatureOffset + assemblingFeatureLength, sequence.size() - (targets.assemblingFeatureOffset + assemblingFeatureLength));
+            }
         }
+
+        return null;
     }
+
+//         // V-only target or target with assemblingFeature
+//         if (range.getTo() < nLeftDummies + lengthV || i == targets.assemblingFeatureTargetId) {
+//             int offset1 = range.getFrom() - nLeftDummies;
+//             int length1 = range.length();
+//
+//             int offset2 = 0;
+//             int length2 = sequence.size();
+//
+//             if (offset1 < 0) {
+//                 length1 += offset1;
+//                 offset1 = 0;
+//             }
+//
+//             if (range.getFrom() < nLeftDummies || i == 0)
+//                 vTopHitAlignments[i] = AlignerCustom.alignLinearSemiLocalRight0(
+//                         ((LinearGapAlignmentScoring<NucleotideSequence>) alignerParameters.getVAlignerParameters().getScoring()),
+//                         vTopReferenceSequence, sequence.getSequence(),
+//                         offset1, length1,
+//                         offset2, length2,
+//                         false, false,
+//                         NucleotideSequence.ALPHABET,
+//                         matrixCache);
+//             else
+//                 vTopHitAlignments[i] = Aligner.alignGlobal(
+//                         alignerParameters.getVAlignerParameters().getScoring(),
+//                         vTopReferenceSequence,
+//                         sequence,
+//                         offset1, length1,
+//                         offset2, length2);
+//         } else if (range.getFrom() >= nLeftDummies + lengthV + assemblingFeatureLength
+//                 && range.getTo() < nLeftDummies + lengthV + assemblingFeatureLength + jLength) {
+//             Alignment<NucleotideSequence> al = Aligner.alignGlobal(
+//                     alignerParameters.getJAlignerParameters().getScoring(),
+//                     jTopReferenceSequence.getRange(range.move(jOffset - (nLeftDummies + lengthV + assemblingFeatureLength))),
+//                     sequence.getSequence());
+//             jTopHitAlignments[i] = new Alignment<>(
+//                     jTopReferenceSequence,
+//                     al.getAbsoluteMutations().move(range.getFrom() + jOffset - (nLeftDummies + lengthV + assemblingFeatureLength)),
+//                     al.getScore());
+//         } else if (range.getFrom() >= nLeftDummies + lengthV + assemblingFeatureLength) {
+//             jTopHitAlignments[i] = AlignerCustom.alignLinearSemiLocalLeft0(
+//                     ((LinearGapAlignmentScoring<NucleotideSequence>) alignerParameters.getJAlignerParameters().getScoring()),
+//                     jTopReferenceSequence, sequence.getSequence(),
+//                     range.getFrom() + jOffset - (nLeftDummies + lengthV + assemblingFeatureLength),
+//                     jTopReferenceSequence.size() - (range.getFrom() + jOffset - (nLeftDummies + lengthV + assemblingFeatureLength)),
+//                     0, sequence.size(),
+//                     false, false,
+//                     NucleotideSequence.ALPHABET,
+//                     matrixCache);
+//         }
+//
+//         targets.
+//     }
+// }
 
     AssembledSequences assembleSequences(int[] points, VariantBranch branch) {
         long[] positionedStates = new long[points.length];
