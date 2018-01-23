@@ -4,10 +4,7 @@ import cc.redberry.pipe.CUtils;
 import cc.redberry.pipe.OutputPort;
 import com.milaboratory.core.Range;
 import com.milaboratory.core.alignment.*;
-import com.milaboratory.core.sequence.NSequenceWithQuality;
-import com.milaboratory.core.sequence.NSequenceWithQualityBuilder;
-import com.milaboratory.core.sequence.NucleotideSequence;
-import com.milaboratory.core.sequence.SequenceQuality;
+import com.milaboratory.core.sequence.*;
 import com.milaboratory.mixcr.basictypes.Clone;
 import com.milaboratory.mixcr.basictypes.VDJCAlignments;
 import com.milaboratory.mixcr.basictypes.VDJCHit;
@@ -19,6 +16,7 @@ import gnu.trove.map.hash.TIntIntHashMap;
 import gnu.trove.map.hash.TIntObjectHashMap;
 import gnu.trove.map.hash.TObjectIntHashMap;
 import io.repseq.core.GeneFeature;
+import io.repseq.core.GeneType;
 import io.repseq.core.ReferencePoint;
 import io.repseq.core.VDJCGene;
 import io.repseq.gen.VDJCGenes;
@@ -38,7 +36,7 @@ final class FullSeqAggregator {
     final GeneFeature assemblingFeature;
     final VDJCGenes genes;
     final boolean hasV, hasJ;
-    final int nLeftDummies, lengthV, assemblingFeatureLength, jOffset, jLength;
+    final int nLeftDummies, lengthV, assemblingFeatureLength, jOffset, jLength, rightAssemblingFeatureBound;
 
     final double minimalQualityShare = 0.1;
     final long minimalSumQuality = 20;
@@ -108,6 +106,8 @@ final class FullSeqAggregator {
             this.jOffset = 0;
             this.jLength = 0;
         }
+
+        this.rightAssemblingFeatureBound = nLeftDummies + lengthV + assemblingFeatureLength;
     }
 
     Clone[] process(PreparedData data) {
@@ -130,11 +130,12 @@ final class FullSeqAggregator {
             branches = newBranches;
         }
 
-
-        return null;
+        return branches.stream()
+                .map(branch -> buildClone(branch.count, assembleSequences(data.points, branch)))
+                .toArray(Clone[]::new);
     }
 
-    Clone buildClone(AssembledSequences targets) {
+    Clone buildClone(double count, AssembledSequences targets) {
         Alignment<NucleotideSequence>[] vTopHitAlignments = new Alignment[targets.ranges.length],
                 jTopHitAlignments = new Alignment[targets.ranges.length];
         VDJCHit hit = clone.getBestHit(Variable);
@@ -152,6 +153,17 @@ final class FullSeqAggregator {
         for (int i = 0; i < targets.ranges.length; i++) {
             Range range = targets.ranges[i];
             NucleotideSequence sequence = targets.sequences[i].getSequence();
+
+            // Asserts
+            if (range.getFrom() < nLeftDummies + lengthV
+                    && range.getTo() >= nLeftDummies + lengthV
+                    && i != targets.assemblingFeatureTargetId)
+                throw new RuntimeException();
+
+            if (range.getTo() >= rightAssemblingFeatureBound
+                    && range.getFrom() < rightAssemblingFeatureBound
+                    && i != targets.assemblingFeatureTargetId)
+                throw new RuntimeException();
 
             // Params:
             // V floatingLeftBound = true / false
@@ -234,7 +246,7 @@ final class FullSeqAggregator {
                 boolean jFloatingRightBound =
                         i == targets.ranges.length - 1 && alignerParameters.getJAlignerParameters().getParameters().isFloatingRightBound();
 
-                if (range.getTo() >= nLeftDummies + lengthV + assemblingFeatureLength + jLength)
+                if (range.getTo() >= rightAssemblingFeatureBound + jLength)
                     // This target contain extra non-J nucleotides on the right
                     jTopHitAlignments[i] = AlignerCustom.alignLinearSemiLocalLeft0(
                             ((LinearGapAlignmentScoring<NucleotideSequence>) alignerParameters.getJAlignerParameters().getScoring()),
@@ -248,7 +260,7 @@ final class FullSeqAggregator {
                     jTopHitAlignments[i] = AlignerCustom.alignLinearSemiLocalLeft0(
                             ((LinearGapAlignmentScoring<NucleotideSequence>) alignerParameters.getJAlignerParameters().getScoring()),
                             jTopReferenceSequence, sequence.getSequence(),
-                            jOffset, range.getTo() - (nLeftDummies + lengthV + assemblingFeatureLength),
+                            jOffset, range.getTo() - rightAssemblingFeatureBound,
                             targets.assemblingFeatureOffset + assemblingFeatureLength, sequence.size() - (targets.assemblingFeatureOffset + assemblingFeatureLength),
                             false, false,
                             NucleotideSequence.ALPHABET,
@@ -258,12 +270,92 @@ final class FullSeqAggregator {
                             alignerParameters.getJAlignerParameters().getScoring(),
                             jTopReferenceSequence,
                             sequence,
-                            jOffset, range.getTo() - (nLeftDummies + lengthV + assemblingFeatureLength),
+                            jOffset, range.getTo() - (rightAssemblingFeatureBound),
                             targets.assemblingFeatureOffset + assemblingFeatureLength, sequence.size() - (targets.assemblingFeatureOffset + assemblingFeatureLength));
-            }
+            } else if (range.getFrom() > rightAssemblingFeatureBound) {
+                boolean floatingRightBound =
+                        i == targets.ranges.length - 1 && alignerParameters.getJAlignerParameters().getParameters().isFloatingRightBound();
+
+                if (range.getTo() >= rightAssemblingFeatureBound + jLength)
+                    // This target contain extra non-J nucleotides on the right
+                    jTopHitAlignments[i] = AlignerCustom.alignLinearSemiLocalLeft0(
+                            ((LinearGapAlignmentScoring<NucleotideSequence>) alignerParameters.getJAlignerParameters().getScoring()),
+                            jTopReferenceSequence, sequence.getSequence(),
+                            jOffset + (range.getFrom() - rightAssemblingFeatureBound), jLength - (jOffset + (range.getFrom() - rightAssemblingFeatureBound)),
+                            0, sequence.size(),
+                            !floatingRightBound, false,
+                            NucleotideSequence.ALPHABET,
+                            matrixCache);
+                else if (floatingRightBound)
+                    jTopHitAlignments[i] = AlignerCustom.alignLinearSemiLocalLeft0(
+                            ((LinearGapAlignmentScoring<NucleotideSequence>) alignerParameters.getJAlignerParameters().getScoring()),
+                            jTopReferenceSequence, sequence.getSequence(),
+                            jOffset + (range.getFrom() - rightAssemblingFeatureBound), range.length(),
+                            0, sequence.size(),
+                            false, false,
+                            NucleotideSequence.ALPHABET,
+                            matrixCache);
+                else
+                    jTopHitAlignments[i] = Aligner.alignGlobal(
+                            alignerParameters.getJAlignerParameters().getScoring(),
+                            jTopReferenceSequence,
+                            sequence,
+                            jOffset + (range.getFrom() - rightAssemblingFeatureBound), range.length(),
+                            0, sequence.size());
+            } else
+                throw new RuntimeException();
         }
 
-        return null;
+        vTopHitAlignments[targets.assemblingFeatureTargetId] =
+                mergeTwoAlignments(
+                        vTopHitAlignments[targets.assemblingFeatureTargetId],
+                        clone.getBestHit(Variable).getAlignment(0));
+
+        jTopHitAlignments[targets.assemblingFeatureTargetId] =
+                mergeTwoAlignments(
+                        jTopHitAlignments[targets.assemblingFeatureTargetId],
+                        clone.getBestHit(Joining).getAlignment(0));
+
+        EnumMap<GeneType, VDJCHit[]> hits = new EnumMap<>(GeneType.class);
+        for (GeneType gt : GeneType.VDJC_REFERENCE)
+            hits.put(gt, Arrays.stream(clone.getHits(gt))
+                    .map(h -> moveHitTarget(h, targets.assemblingFeatureTargetId,
+                            targets.assemblingFeatureOffset, targets.ranges.length))
+                    .toArray(VDJCHit[]::new));
+
+        VDJCHit[] tmp = hits.get(Variable);
+        tmp[0] = substituteAlignments(tmp[0], vTopHitAlignments);
+        tmp = hits.get(Joining);
+        tmp[0] = substituteAlignments(tmp[0], jTopHitAlignments);
+
+        return new Clone(targets.sequences, hits, clone.getAssemblingFeatures(), count, 0);
+    }
+
+    static VDJCHit substituteAlignments(VDJCHit hit, Alignment<NucleotideSequence>[] alignments) {
+        return new VDJCHit(hit.getGene(), alignments, hit.getAlignedFeature(), hit.getScore());
+    }
+
+    static VDJCHit moveHitTarget(VDJCHit hit, int targetTargetId, int sequence2OffsetInTarget, int targetsCount) {
+        // TODO (!!!) extend alignments for targets.assemblingFeatureTargetId
+
+        if (hit.numberOfTargets() != 1)
+            throw new IllegalArgumentException();
+
+        Alignment<NucleotideSequence>[] alignments = new Alignment[targetsCount];
+        alignments[targetTargetId] = hit.getAlignment(0).move(sequence2OffsetInTarget);
+        return new VDJCHit(hit.getGene(), alignments, hit.getAlignedFeature(), hit.getScore());
+    }
+
+    static <S extends Sequence<S>> Alignment<S> mergeTwoAlignments(Alignment<S> a1, Alignment<S> a2) {
+        if (a1.getSequence1Range().getTo() != a2.getSequence1Range().getFrom()
+                || a1.getSequence2Range().getTo() != a2.getSequence2Range().getFrom()
+                || a1.getSequence1() != a2.getSequence1() /* Compare reference */)
+            throw new IllegalArgumentException();
+
+        return new Alignment<>(a1.getSequence1(), a1.getAbsoluteMutations().combineWith(a2.getAbsoluteMutations()),
+                new Range(a1.getSequence1Range().getFrom(), a2.getSequence1Range().getTo()),
+                new Range(a1.getSequence2Range().getFrom(), a2.getSequence2Range().getTo()),
+                a1.getScore() + a2.getScore());
     }
 
 //         // V-only target or target with assemblingFeature

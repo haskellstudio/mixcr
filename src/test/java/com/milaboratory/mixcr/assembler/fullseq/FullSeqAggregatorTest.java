@@ -5,6 +5,8 @@ import com.milaboratory.core.io.sequence.PairedRead;
 import com.milaboratory.core.io.sequence.SingleReadImpl;
 import com.milaboratory.core.sequence.NSequenceWithQuality;
 import com.milaboratory.core.sequence.NucleotideSequence;
+import com.milaboratory.mixcr.basictypes.Clone;
+import com.milaboratory.mixcr.cli.ActionExportClonesPretty;
 import com.milaboratory.mixcr.util.RunMiXCR;
 import com.milaboratory.mixcr.vdjaligners.VDJCParametersPresets;
 import gnu.trove.set.hash.TIntHashSet;
@@ -85,7 +87,7 @@ public class FullSeqAggregatorTest {
 
         RunMiXCR.AssembleResult assemble = RunMiXCR.assemble(align);
 
-        FullSeqAggregator agg = new FullSeqAggregator(assemble.cloneSet.get(0));
+        FullSeqAggregator agg = new FullSeqAggregator(assemble.cloneSet.get(0), align.parameters.alignerParameters);
 
         PointSequence[] r2s = agg.convertToPointSequences(align.alignments.get(1));
         TIntHashSet p2 = new TIntHashSet(Arrays.stream(r2s).mapToInt(s -> s.point).toArray());
@@ -107,11 +109,8 @@ public class FullSeqAggregatorTest {
         Assert.assertEquals(40, uniq1);
         Assert.assertEquals(60, uniq2);
 
-
-//        int i = 0;
-//        for (int[] ints : CUtils.it(prep.createPort())) {
-//            System.out.println(Arrays.stream(ints).mapToObj(s -> String.format("%08X", s)).collect(Collectors.joining(", ")) + "    ->" + prep.points[i]);
-//            ++i;
-//        }
+        for (Clone clone : agg.process(prep)) {
+            ActionExportClonesPretty.outputCompact(System.out, clone);
+        }
     }
 }
