@@ -39,7 +39,7 @@ final class FullSeqAggregator {
     final int nLeftDummies, lengthV, assemblingFeatureLength, jOffset, jLength, rightAssemblingFeatureBound;
 
     final double minimalQualityShare = 0.1;
-    final long minimalSumQuality = 20;
+    final long minimalSumQuality = 80;
     /**
      * Even if other criteria are not met, but sum quality reaches this threshold, variant is marked as significant.
      */
@@ -121,11 +121,15 @@ final class FullSeqAggregator {
             List<VariantBranch> newBranches = new ArrayList<>();
             for (VariantBranch branch : branches) {
                 List<Variant> variants = callVariants(variantInfos, branch.reads);
-                int sumSignificant = 0;
-                for (Variant variant : variants)
-                    sumSignificant += variant.nSignificant;
-                for (Variant variant : variants)
-                    newBranches.add(branch.addVariant(variant, sumSignificant));
+                if (variants.size() == 1 && variants.get(0).variantInfo == ABSENT_PACKED_VARIANT_INFO)
+                    newBranches.add(branch.addAbsentVariant());
+                else {
+                    int sumSignificant = 0;
+                    for (Variant variant : variants)
+                        sumSignificant += variant.nSignificant;
+                    for (Variant variant : variants)
+                        newBranches.add(branch.addVariant(variant, sumSignificant));
+                }
             }
             branches = newBranches;
         }
@@ -251,7 +255,7 @@ final class FullSeqAggregator {
                     jTopHitAlignments[i] = AlignerCustom.alignLinearSemiLocalLeft0(
                             ((LinearGapAlignmentScoring<NucleotideSequence>) alignerParameters.getJAlignerParameters().getScoring()),
                             jTopReferenceSequence, sequence.getSequence(),
-                            jOffset, jLength - jOffset,
+                            jOffset, jLength,
                             targets.assemblingFeatureOffset + assemblingFeatureLength, sequence.size() - (targets.assemblingFeatureOffset + assemblingFeatureLength),
                             !jFloatingRightBound, false,
                             NucleotideSequence.ALPHABET,
@@ -270,7 +274,7 @@ final class FullSeqAggregator {
                             alignerParameters.getJAlignerParameters().getScoring(),
                             jTopReferenceSequence,
                             sequence,
-                            jOffset, range.getTo() - (rightAssemblingFeatureBound),
+                            jOffset, range.getTo() - rightAssemblingFeatureBound,
                             targets.assemblingFeatureOffset + assemblingFeatureLength, sequence.size() - (targets.assemblingFeatureOffset + assemblingFeatureLength));
             } else if (range.getFrom() > rightAssemblingFeatureBound) {
                 boolean floatingRightBound =
@@ -281,7 +285,7 @@ final class FullSeqAggregator {
                     jTopHitAlignments[i] = AlignerCustom.alignLinearSemiLocalLeft0(
                             ((LinearGapAlignmentScoring<NucleotideSequence>) alignerParameters.getJAlignerParameters().getScoring()),
                             jTopReferenceSequence, sequence.getSequence(),
-                            jOffset + (range.getFrom() - rightAssemblingFeatureBound), jLength - (jOffset + (range.getFrom() - rightAssemblingFeatureBound)),
+                            jOffset + (range.getFrom() - rightAssemblingFeatureBound), jLength - (range.getFrom() - rightAssemblingFeatureBound),
                             0, sequence.size(),
                             !floatingRightBound, false,
                             NucleotideSequence.ALPHABET,
@@ -309,12 +313,12 @@ final class FullSeqAggregator {
         vTopHitAlignments[targets.assemblingFeatureTargetId] =
                 mergeTwoAlignments(
                         vTopHitAlignments[targets.assemblingFeatureTargetId],
-                        clone.getBestHit(Variable).getAlignment(0));
+                        clone.getBestHit(Variable).getAlignment(0).move(targets.assemblingFeatureOffset));
 
         jTopHitAlignments[targets.assemblingFeatureTargetId] =
                 mergeTwoAlignments(
-                        jTopHitAlignments[targets.assemblingFeatureTargetId],
-                        clone.getBestHit(Joining).getAlignment(0));
+                        clone.getBestHit(Joining).getAlignment(0).move(targets.assemblingFeatureOffset),
+                        jTopHitAlignments[targets.assemblingFeatureTargetId]);
 
         EnumMap<GeneType, VDJCHit[]> hits = new EnumMap<>(GeneType.class);
         for (GeneType gt : GeneType.VDJC_REFERENCE)
@@ -342,7 +346,9 @@ final class FullSeqAggregator {
             throw new IllegalArgumentException();
 
         Alignment<NucleotideSequence>[] alignments = new Alignment[targetsCount];
-        alignments[targetTargetId] = hit.getAlignment(0).move(sequence2OffsetInTarget);
+        Alignment<NucleotideSequence> al = hit.getAlignment(0);
+        if (al != null)
+            alignments[targetTargetId] = al.move(sequence2OffsetInTarget);
         return new VDJCHit(hit.getGene(), alignments, hit.getAlignedFeature(), hit.getScore());
     }
 
@@ -424,8 +430,13 @@ final class FullSeqAggregator {
         NSequenceWithQualityBuilder sequenceBuilder = new NSequenceWithQualityBuilder();
         int blockStartPosition = extractPosition(positionedStates[0]);
         for (int i = 0; i < positionedStates.length; ++i) {
+            if (isAbsent(positionedStates[i]))
+                continue;
+
             int currentPosition = extractPosition(positionedStates[i]);
             int nextPosition = i == positionedStates.length - 1
+                    ? Integer.MAX_VALUE
+                    : isAbsent(positionedStates[i + 1])
                     ? Integer.MAX_VALUE
                     : extractPosition(positionedStates[i + 1]);
 
@@ -433,7 +444,7 @@ final class FullSeqAggregator {
 
             sequenceBuilder.append(
                     new NSequenceWithQuality(
-                            variantIdToSequence.get((int) (positionedStates[i] >>> 8)),
+                            variantIdToSequence.get(((int) (positionedStates[i] >>> 8)) & 0xFFFFFF),
                             (byte) positionedStates[i]));
 
             if (currentPosition != nextPosition - 1) {
@@ -503,6 +514,10 @@ final class FullSeqAggregator {
         return (int) (positionedState >>> 32);
     }
 
+    private static boolean isAbsent(long positionedState) {
+        return (int) (positionedState & 0xFFFFFFFF) == ABSENT_PACKED_VARIANT_INFO;
+    }
+
     private final class AssembledSequences {
         final int assemblingFeatureTargetId;
         final int assemblingFeatureOffset;
@@ -546,6 +561,12 @@ final class FullSeqAggregator {
             this.reads = reads;
         }
 
+        public VariantBranch addAbsentVariant() {
+            int[] newStates = Arrays.copyOf(pointStates, pointStates.length + 1);
+            newStates[newStates.length - 1] = ABSENT_PACKED_VARIANT_INFO;
+            return new VariantBranch(count, newStates, reads);
+        }
+
         public VariantBranch addVariant(Variant variant, int sumSignificant) {
             int[] newStates = Arrays.copyOf(pointStates, pointStates.length + 1);
             newStates[newStates.length - 1] = variant.variantInfo;
@@ -574,6 +595,9 @@ final class FullSeqAggregator {
             if (pointVariantInfos[readId] != ABSENT_PACKED_VARIANT_INFO)
                 ++count;
         }
+
+        if (count == 0)
+            return Collections.singletonList(new Variant(ABSENT_PACKED_VARIANT_INFO, targetReads, 0));
 
         // List of readIds of reads that either:
         //   - don't cover this point
@@ -786,11 +810,11 @@ final class FullSeqAggregator {
                 .toArray(PointSequence[]::new);
     }
 
-    void convertToPointSequences(List<PointSequence> points,
-                                 Alignment<NucleotideSequence> alignments,
-                                 NSequenceWithQuality seq2,
-                                 Range seq2Range,
-                                 int offset) {
+    void convertToPointSequencesByAlignments(List<PointSequence> points,
+                                             Alignment<NucleotideSequence> alignments,
+                                             NSequenceWithQuality seq2,
+                                             Range seq2Range,
+                                             int offset) {
 
         Range
                 alSeq2Range = alignments.getSequence2Range(),
@@ -824,10 +848,10 @@ final class FullSeqAggregator {
         }
     }
 
-    void convertToPointSequences(List<PointSequence> points,
-                                 NSequenceWithQuality seq2,
-                                 Range seq2Range,
-                                 int offset) {
+    void convertToPointSequencesNoAlignments(List<PointSequence> points,
+                                             NSequenceWithQuality seq2,
+                                             Range seq2Range,
+                                             int offset) {
 
         for (int i = seq2Range.getFrom(); i < seq2Range.getTo(); ++i) {
             NSequenceWithQuality seq = seq2.getRange(i, i + 1);
@@ -862,34 +886,34 @@ final class FullSeqAggregator {
         if (target.getPartitioning().isAvailable(assemblingFeature)) {
             int leftStop = target.getPartitioning().getPosition(assemblingFeature.getFirstPoint());
             if (hasV) {
-                assert vHitOpt.isPresent();
-                convertToPointSequences(points,
-                        vHitOpt.get(),
-                        targetSeq,
-                        new Range(0, leftStop),
-                        nLeftDummies);
+                if (vHitOpt.isPresent())
+                    convertToPointSequencesByAlignments(points,
+                            vHitOpt.get(),
+                            targetSeq,
+                            new Range(0, leftStop),
+                            nLeftDummies);
             } else
-                convertToPointSequences(points, targetSeq, new Range(0, leftStop), nLeftDummies - leftStop);
+                convertToPointSequencesNoAlignments(points, targetSeq, new Range(0, leftStop), nLeftDummies - leftStop);
 
             int rightStart = target.getPartitioning().getPosition(assemblingFeature.getLastPoint());
             if (hasJ) {
-                assert jHitOpt.isPresent();
-                convertToPointSequences(points,
-                        jHitOpt.get(),
-                        targetSeq,
-                        new Range(rightStart, targetSeq.size()),
-                        nLeftDummies + lengthV + assemblingFeatureLength - jOffset);
+                if (jHitOpt.isPresent())
+                    convertToPointSequencesByAlignments(points,
+                            jHitOpt.get(),
+                            targetSeq,
+                            new Range(rightStart, targetSeq.size()),
+                            nLeftDummies + lengthV + assemblingFeatureLength - jOffset);
             } else
-                convertToPointSequences(points, targetSeq, new Range(rightStart, targetSeq.size()), nLeftDummies + lengthV + assemblingFeatureLength - rightStart);
+                convertToPointSequencesNoAlignments(points, targetSeq, new Range(rightStart, targetSeq.size()), nLeftDummies + lengthV + assemblingFeatureLength - rightStart);
 
         } else if (hasV && vHitOpt.isPresent())
-            convertToPointSequences(points,
+            convertToPointSequencesByAlignments(points,
                     vHitOpt.get(),
                     targetSeq,
                     new Range(0, vHitOpt.get().getSequence2Range().getTo()),
                     nLeftDummies);
         else if (hasJ && jHitOpt.isPresent())
-            convertToPointSequences(points,
+            convertToPointSequencesByAlignments(points,
                     jHitOpt.get(),
                     targetSeq,
                     new Range(jHitOpt.get().getSequence2Range().getFrom(), targetSeq.size()),

@@ -219,7 +219,7 @@ public final class RunMiXCR {
 
                 @Override
                 public long getNumberOfReads() {
-                    return input.length;
+                    return counter;
                 }
 
                 @Override
