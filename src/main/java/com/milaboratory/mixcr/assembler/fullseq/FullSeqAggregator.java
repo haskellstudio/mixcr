@@ -811,22 +811,25 @@ final class FullSeqAggregator {
     }
 
     void convertToPointSequencesByAlignments(List<PointSequence> points,
-                                             Alignment<NucleotideSequence> alignments,
+                                             Alignment<NucleotideSequence> alignment,
                                              NSequenceWithQuality seq2,
                                              Range seq2Range,
                                              int offset) {
 
+//        if (seq2Range.length() == 0)
+//            return;
+
         Range
-                alSeq2Range = alignments.getSequence2Range(),
+                alSeq2Range = alignment.getSequence2Range(),
                 alSeq2RangeIntersection = alSeq2Range.intersection(seq2Range),
-                alSeq1RangeIntersection = alignments.convertToSeq1Range(alSeq2RangeIntersection);
+                alSeq1RangeIntersection = alignment.convertToSeq1Range(alSeq2RangeIntersection);
 
         assert alSeq1RangeIntersection != null;
 
         int shift;
 
         // left
-        shift = offset + alignments.getSequence1Range().getFrom() - alignments.getSequence2Range().getFrom();
+        shift = offset + alignment.getSequence1Range().getFrom() - alignment.getSequence2Range().getFrom();
         for (int i = seq2Range.getFrom(); i < alSeq2RangeIntersection.getFrom(); ++i) {
             NSequenceWithQuality seq = seq2.getRange(i, i + 1);
             points.add(new PointSequence(i + shift, seq));
@@ -835,13 +838,13 @@ final class FullSeqAggregator {
         // central
         for (int i = alSeq1RangeIntersection.getFrom(); i < alSeq1RangeIntersection.getTo(); ++i) {
             NSequenceWithQuality seq = seq2.getRange(
-                    Alignment.aabs(alignments.convertToSeq2Position(i)),
-                    Alignment.aabs(alignments.convertToSeq2Position(i + 1)));
+                    Alignment.aabs(alignment.convertToSeq2Position(i)),
+                    Alignment.aabs(alignment.convertToSeq2Position(i + 1)));
             points.add(new PointSequence(i + offset, seq));
         }
 
         // right
-        shift = offset + alignments.getSequence1Range().getTo() - alignments.getSequence2Range().getTo();
+        shift = offset + alignment.getSequence1Range().getTo() - alignment.getSequence2Range().getTo();
         for (int i = alSeq2RangeIntersection.getTo(); i < seq2Range.getTo(); ++i) {
             NSequenceWithQuality seq = seq2.getRange(i, i + 1);
             points.add(new PointSequence(i + shift, seq));
@@ -870,53 +873,57 @@ final class FullSeqAggregator {
         VDJCPartitionedSequence target = alignments.getPartitionedTarget(iTarget);
         NSequenceWithQuality targetSeq = alignments.getTarget(iTarget);
 
-        Optional<Alignment<NucleotideSequence>> vHitOpt = Arrays.stream(alignments.getHits(Variable))
-                .filter(c -> Objects.equals(genes.v, c.getGene()))
-                .map(c -> c.getAlignment(iTarget))
-                .filter(Objects::nonNull)
-                .findAny();
+        VDJCHit vHit = alignments.getBestHit(Variable);
+        Alignment<NucleotideSequence> vAlignment =
+                (vHit == null
+                        || vHit.getAlignment(iTarget) == null
+                        || !Objects.equals(genes.v, vHit.getGene()))
+                        ? null
+                        : vHit.getAlignment(iTarget);
 
-        Optional<Alignment<NucleotideSequence>> jHitOpt = Arrays.stream(alignments.getHits(Joining))
-                .filter(c -> Objects.equals(genes.j, c.getGene()))
-                .map(c -> c.getAlignment(iTarget))
-                .filter(Objects::nonNull)
-                .findAny();
+        VDJCHit jHit = alignments.getBestHit(Joining);
+        Alignment<NucleotideSequence> jAlignment =
+                (jHit == null
+                        || jHit.getAlignment(iTarget) == null
+                        || !Objects.equals(genes.j, jHit.getGene()))
+                        ? null
+                        : jHit.getAlignment(iTarget);
 
         List<PointSequence> points = new ArrayList<>();
-        if (target.getPartitioning().isAvailable(assemblingFeature)) {
+        if (target.getPartitioning().isAvailable(assemblingFeature.getFirstPoint())) {
             int leftStop = target.getPartitioning().getPosition(assemblingFeature.getFirstPoint());
             if (hasV) {
-                if (vHitOpt.isPresent())
+                if (vAlignment != null)
                     convertToPointSequencesByAlignments(points,
-                            vHitOpt.get(),
+                            vAlignment,
                             targetSeq,
                             new Range(0, leftStop),
                             nLeftDummies);
             } else
                 convertToPointSequencesNoAlignments(points, targetSeq, new Range(0, leftStop), nLeftDummies - leftStop);
+        } else if (hasV && vAlignment != null)
+            convertToPointSequencesByAlignments(points,
+                    vAlignment,
+                    targetSeq,
+                    new Range(0, vAlignment.getSequence2Range().getTo()),
+                    nLeftDummies);
 
+        if (target.getPartitioning().isAvailable(assemblingFeature.getLastPoint())) {
             int rightStart = target.getPartitioning().getPosition(assemblingFeature.getLastPoint());
             if (hasJ) {
-                if (jHitOpt.isPresent())
+                if (jAlignment != null)
                     convertToPointSequencesByAlignments(points,
-                            jHitOpt.get(),
+                            jAlignment,
                             targetSeq,
                             new Range(rightStart, targetSeq.size()),
                             nLeftDummies + lengthV + assemblingFeatureLength - jOffset);
             } else
                 convertToPointSequencesNoAlignments(points, targetSeq, new Range(rightStart, targetSeq.size()), nLeftDummies + lengthV + assemblingFeatureLength - rightStart);
-
-        } else if (hasV && vHitOpt.isPresent())
+        } else if (hasJ && jAlignment != null)
             convertToPointSequencesByAlignments(points,
-                    vHitOpt.get(),
+                    jAlignment,
                     targetSeq,
-                    new Range(0, vHitOpt.get().getSequence2Range().getTo()),
-                    nLeftDummies);
-        else if (hasJ && jHitOpt.isPresent())
-            convertToPointSequencesByAlignments(points,
-                    jHitOpt.get(),
-                    targetSeq,
-                    new Range(jHitOpt.get().getSequence2Range().getFrom(), targetSeq.size()),
+                    new Range(jAlignment.getSequence2Range().getFrom(), targetSeq.size()),
                     nLeftDummies + lengthV + assemblingFeatureLength - jOffset);
 
         return points;

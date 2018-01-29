@@ -7,6 +7,7 @@ import com.milaboratory.core.io.sequence.SequenceReaderCloseable;
 import com.milaboratory.core.io.sequence.SingleReadImpl;
 import com.milaboratory.core.sequence.NSequenceWithQuality;
 import com.milaboratory.core.sequence.NucleotideSequence;
+import com.milaboratory.core.sequence.SequenceQuality;
 import com.milaboratory.mixcr.basictypes.Clone;
 import com.milaboratory.mixcr.basictypes.CloneSet;
 import com.milaboratory.mixcr.basictypes.VDJCAlignments;
@@ -16,14 +17,14 @@ import com.milaboratory.mixcr.util.RunMiXCR;
 import com.milaboratory.mixcr.vdjaligners.VDJCParametersPresets;
 import gnu.trove.set.hash.TIntHashSet;
 import io.repseq.core.GeneFeature;
+import io.repseq.core.GeneType;
 import org.apache.commons.math3.random.RandomDataGenerator;
 import org.apache.commons.math3.random.Well19937c;
+import org.apache.commons.math3.random.Well44497b;
 import org.junit.Assert;
 import org.junit.Test;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
@@ -77,7 +78,38 @@ public class FullSeqAggregatorTest {
                     "AGGCAGGCCCCATCTGTCTCCTCACCCGGAGGCCTCTGCCCGCCCCACTCATGCTCAGGGAGAGGGTCTTCTGGCTTTTTCCACCAGGCTCCAGGCAG" +
                     "GCACAGGCTGGGTGCCCCTACCCCAGGCCCTTCACACACAGGGGCAGGTGCTTGGCTCAGACCTGCCAAAAGCCATATCCGG");
 
-    static final MasterSequence masterSeq1VIns1 = new MasterSequence(
+    static final MasterSequence masterSeq1VDel1JDel1 = new MasterSequence(
+            "CTGAAGAAAACCAGCCCTGCAGCTCTGGAGAGGAGCCCCAGCCCTGGGATTCCCAGCTGTTTCTGCTTGCTGATCAGGACTGCACACAGAGAACTCACC" +
+                    "ATGGAGTTTGGGCTGAGCTGGGTTTTCCTTGTTGCTATTTTAAAAGGTGTCCAGTGTGAGGTGCAGCTGGTGGAGTCCGGGGGAGGCTTAGTTCAGCC" +
+                    "TGGGGGGTCCCTGAGACTCTCCTGTGCAGCCTCTGATTCACCTTCAGTAGCTACTGGATGCACTGGGTCCGCCAAGCTCCAGGGAAGGGGCTGGTGT" +
+                    "GGGTCTCACGTATTAATAGTGATGGGAGTAGCACAAGCTACGCGGACTCCGTGAAGGGCCGATTCACCATCTCCAGAGACAACGCCAAGAACACGCTG" +
+                    "TATCTGCAAATGAACAGTCTGAGAGCCGAGGACACGGCTGTGTATTAC",
+            "TGTGCAAGAGGGCCCCAAGAAAATAGTGGTTATTACTACGGGTTTGACTACTGG",
+            "GGCCAGGGAACCCTGGTCACCTCTCCTCAG",
+            "CCTCCACCAAGGGCCCATCGGTCTTCCCCCTGGCGCCCTGCTCCAGGAGCACCTCCGAGAGCACAGCGGCCCTGGGCTGCCTGGTCAAGGACTACTTCCC" +
+                    "CGAACCGGTGACGGTGTCGTGGAACTCAGGCGCTCTGACCAGCGGCGTGCACACCTTCCCGGCTGTCCTACAGTCCTCAGGACTCTACTCCCTCAGCA" +
+                    "GCGTGGTGACCGTGCCCTCCAGCAACTTCGGCACCCAGACCTACACCTGCAACGTAGATCACAAGCCCAGCAACACCAAGGTGGACAAGACAGTTGGT" +
+                    "GAGAGGCCAGCTCAGGGAGGGAGGGTGTCTGCTGGAAGCCAGGCTCAGCCCTCCTGCCTGGACGCACCCCGGCTGTGCAGCCCCAGCCCAGGGCAGCA" +
+                    "AGGCAGGCCCCATCTGTCTCCTCACCCGGAGGCCTCTGCCCGCCCCACTCATGCTCAGGGAGAGGGTCTTCTGGCTTTTTCCACCAGGCTCCAGGCAG" +
+                    "GCACAGGCTGGGTGCCCCTACCCCAGGCCCTTCACACACAGGGGCAGGTGCTTGGCTCAGACCTGCCAAAAGCCATATCCGG");
+
+    static final MasterSequence masterSeq1VDel1JDelVSub2 = new MasterSequence(
+            "CTGAAGAAAACCAGCCCTGCAGCTCTGGAGAGGAGCCCCAGCCCTGGGATTCCCAGCTGTTTCTGCTTGCTGATCAGGACTGCACACAGAGAACTCACC" +
+                    "ATGGAGTTTGGGCTGAGCTGGGTTTTCCTTGTTGCTATTTTAAAAGGTGTCCAGTGTGAGGTGCAGCTGGTGGAGTCCGGGGGAGGCTTAGTTCAGCC" +
+                    "TGGGGGGTCCCTGAGACTCTCCTGTGCAGCCTCTGATTCACCTTCATTAGCTACTGGATGCACTGGGTCCGCCAAGCTCCAGGGAAGGGGCTGGTGT" +
+                    "AGGTCTCACGTATTAATAGTGATGGGAGTAGCACAAGCTACGCGGACTCCGTGAAGGGCCGATTCACCATCTCCAGAGACAACGCCAAGAACACGCTG" +
+                    "TATCTGCAAATGAACAGTCTGAGAGCCGAGGACACGGCTGTGTATTAC",
+            "TGTGCAAGAGGGCCCCAAGAAAATAGTGGTTATTACTACGGGTTTGACTACTGG",
+            "GGCCAGGGAACCCTGGTCACCTCTCCTCAG",
+            "CCTCCACCAAGGGCCCATCGGTCTTCCCCCTGGCGCCCTGCTCCAGGAGCACCTCCGAGAGCACAGCGGCCCTGGGCTGCCTGGTCAAGGACTACTTCCC" +
+                    "CGAACCGGTGACGGTGTCGTGGAACTCAGGCGCTCTGACCAGCGGCGTGCACACCTTCCCGGCTGTCCTACAGTCCTCAGGACTCTACTCCCTCAGCA" +
+                    "GCGTGGTGACCGTGCCCTCCAGCAACTTCGGCACCCAGACCTACACCTGCAACGTAGATCACAAGCCCAGCAACACCAAGGTGGACAAGACAGTTGGT" +
+                    "GAGAGGCCAGCTCAGGGAGGGAGGGTGTCTGCTGGAAGCCAGGCTCAGCCCTCCTGCCTGGACGCACCCCGGCTGTGCAGCCCCAGCCCAGGGCAGCA" +
+                    "AGGCAGGCCCCATCTGTCTCCTCACCCGGAGGCCTCTGCCCGCCCCACTCATGCTCAGGGAGAGGGTCTTCTGGCTTTTTCCACCAGGCTCCAGGCAG" +
+                    "GCACAGGCTGGGTGCCCCTACCCCAGGCCCTTCACACACAGGGGCAGGTGCTTGGCTCAGACCTGCCAAAAGCCATATCCGG");
+
+
+    static final MasterSequence masterSeq1VLargeIns1 = new MasterSequence(
             "CTGAAGAAAACCAGCCCTGCAGCTCTGGGAGAGGAGCCCCAGCCCTGGGATTCCCAGCTGTTTCTGCTTGCTGATCAGGACTGCACACAGAGAACTCACC" +
                     "ATGGAGTTTGGGCTGAGCTGGGTTTTCCTTGTTGCTATTTTAAAAGGTGTCCAGTGTGAGGTGCAGCTGGTGGAGTCCGGGGGAGGCTTAGTTCAGCC" +
                     "TGGGGGGTCCCTGAGACTCTCCTGTGCAGCCTCTGGATTCACCTTCAGTAGCTACTGGATGCACTGGGTCCGCCAAGCTCCAGGGAAGGGGCTGGTGT" +
@@ -107,7 +139,7 @@ public class FullSeqAggregatorTest {
                     "AGGCAGGCCCCATCTGTCTCCTCACCCGGAGGCCTCTGCCCGCCCCACTCATGCTCAGGGAGAGGGTCTTCTGGCTTTTTCCACCAGGCTCCAGGCAG" +
                     "GCACAGGCTGGGTGCCCCTACCCCAGGCCCTTCACACACAGGGGCAGGTGCTTGGCTCAGACCTGCCAAAAGCCATATCCGG");
 
-    static final MasterSequence masterSeq1VIns1Sub1 = new MasterSequence(
+    static final MasterSequence masterSeq1VLargeIns1Sub1 = new MasterSequence(
             "CTGAAGAAAACCAGCCCTGCAGCTCTGGGAGAGGAGCCCCAGCCCTGGGATTCCCAGCTGTTTCTGCTTGCTGATCAGGACTGCACACAGAGAACTCACC" +
                     "ATGGAGTTTGGGCTGAGCTGGGTTTTCCTTGTTGCTATTTTAAAAGGTGTCCAGTGTGAGGTGCAGCTGGTGGAGTCCGGGGGAGGCTTAGTTCAGCC" +
                     "TGGGGGGTCCCTGAGACTCTCCTGTGCAGCCTCTGGATTCACCTTCAGTAGCTACTGGATGCACTGGGTCCGCCAAGCTCCAGGGAAGGGGCTGGTGT" +
@@ -125,13 +157,14 @@ public class FullSeqAggregatorTest {
     @Test
     public void testRandom1() throws Exception {
         CloneFraction[] clones = {
-                // new CloneFraction(16, masterSeq1WT),
-                // new CloneFraction(32, masterSeq1VSub1),
-                new CloneFraction(64, masterSeq1VIns1),
-                // new CloneFraction(128, masterSeq1VIns1Sub1),
+                new CloneFraction(1000, masterSeq1WT),
+                new CloneFraction(1000, masterSeq1VSub1),
+                new CloneFraction(1000, masterSeq1VDel1JDel1),
+                new CloneFraction(1000, masterSeq1VDel1JDelVSub2),
         };
 
         Well19937c rand = new Well19937c();
+        rand.setSeed(12345);
         RandomDataGenerator rdg = new RandomDataGenerator(rand);
 
         List<PairedRead> readsOrig = new ArrayList<>();
@@ -151,8 +184,7 @@ public class FullSeqAggregatorTest {
 
                 ++id;
                 readsOrig.add(new PairedRead(
-                        new SingleReadImpl(id, new NSequenceWithQuality(clone.seq.getRangeFromCDR3Begin(rdg.nextInt(-clone.seq.vPart, clone.seq.cdr3Part / 2 - readLength),
-                                readLength)), "R1_" + id),
+                        new SingleReadImpl(id, new NSequenceWithQuality(clone.seq.getRangeFromCDR3Begin(rdg.nextInt(-clone.seq.vPart, clone.seq.cdr3Part / 2 - readLength), readLength)), "R1_" + id),
                         new SingleReadImpl(id, new NSequenceWithQuality(clone.seq.getRangeFromCDR3Begin(-rand.nextInt(readLength - clone.seq.cdr3Part),
                                 readLength)).getReverseComplement(), "R2_" + id)));
             }
@@ -186,22 +218,24 @@ public class FullSeqAggregatorTest {
 
         params.alignerParameters = VDJCParametersPresets.getByName("rna-seq");
         params.alignerParameters.setSaveOriginalReads(true);
+        params.alignerParameters.setVAlignmentParameters(params.alignerParameters.getVAlignerParameters().setGeneFeatureToAlign(GeneFeature.VTranscriptWithP));
 
         RunMiXCR.AlignResult align = RunMiXCR.align(params);
 
-        // TODO exception for translation
-        for (VDJCAlignments al : align.alignments) {
-            for (int i = 0; i < al.numberOfTargets(); i++) {
-                System.out.println(VDJCAlignmentsFormatter.getTargetAsMultiAlignment(al, i));
-                System.out.println();
-            }
-            System.out.println();
-            System.out.println(" ================================================ ");
-            System.out.println();
-        }
+//        // TODO exception for translation
+//        for (VDJCAlignments al : align.alignments) {
+//            for (int i = 0; i < al.numberOfTargets(); i++) {
+//                System.out.println(VDJCAlignmentsFormatter.getTargetAsMultiAlignment(al, i));
+//                System.out.println();
+//            }
+//            System.out.println();
+//            System.out.println(" ================================================ ");
+//            System.out.println();
+//        }
 
 
         RunMiXCR.AssembleResult assemble = RunMiXCR.assemble(align);
+        Assert.assertEquals(1, assemble.cloneSet.size());
 
         FullSeqAggregator agg = new FullSeqAggregator(assemble.cloneSet.get(0), align.parameters.alignerParameters);
 
@@ -209,7 +243,9 @@ public class FullSeqAggregatorTest {
                 align.alignments.stream().filter(a -> a.getFeature(GeneFeature.CDR3) != null).collect(Collectors.toList())
         ));
 
-        for (Clone clone : new CloneSet(Arrays.asList(agg.process(prep))).getClones())
+        List<Clone> clns = new ArrayList<>(new CloneSet(Arrays.asList(agg.process(prep))).getClones());
+        clns.sort(Comparator.comparingDouble(Clone::getCount).reversed());
+        for (Clone clone : clns)
             ActionExportClonesPretty.outputCompact(System.out, clone);
     }
 
@@ -276,6 +312,98 @@ public class FullSeqAggregatorTest {
         Assert.assertEquals(60, uniq2);
 
         for (Clone clone : new CloneSet(Arrays.asList(agg.process(prep))).getClones()) {
+            ActionExportClonesPretty.outputCompact(System.out, clone);
+            System.out.println();
+            System.out.println(" ================================================ ");
+            System.out.println();
+        }
+    }
+
+    @Test
+    public void testLargeCloneNoMismatches() throws Exception {
+        MasterSequence master = FullSeqAggregatorTest.masterSeq1WT;
+
+        NSequenceWithQuality
+                seq = new NSequenceWithQuality(
+                master.getRange(-master.vPart + 10, 80),
+                SequenceQuality.GOOD_QUALITY_VALUE);
+
+        RunMiXCR.RunMiXCRAnalysis params0 = new RunMiXCR.RunMiXCRAnalysis(new SingleReadImpl(0, seq, ""));
+        params0.cloneAssemblerParameters.setAssemblingFeatures(new GeneFeature[]{GeneFeature.VDJRegion});
+        Clone largeClone = RunMiXCR.assemble(RunMiXCR.align(params0)).cloneSet.get(0);
+
+//        ActionExportClonesPretty.outputCompact(System.out, largeClone);
+//        System.exit(0);
+
+        Well44497b rnd = new Well44497b(1234567889L);
+        int nReads = 100_000;
+        int readLength = 75, readGap = 150;
+
+        // slice seq randomly
+        PairedRead[] slicedReads = new PairedRead[nReads];
+        for (int i = 0; i < nReads; ++i) {
+            int
+                    r1from = rnd.nextInt(seq.size() - readLength - 1),
+                    r1to = r1from + readLength,
+                    r2from = r1from + 1 + rnd.nextInt(seq.size() - r1from - readLength - 1),
+                    r2to = r2from + readLength;
+
+            assert r2from > r1from;
+            slicedReads[i] = new PairedRead(
+                    new SingleReadImpl(i, seq.getRange(r1from, r1to), "" + i),
+                    new SingleReadImpl(i, seq.getRange(r2from, r2to).getReverseComplement(), "" + i));
+        }
+
+
+        RunMiXCR.RunMiXCRAnalysis params = new RunMiXCR.RunMiXCRAnalysis(slicedReads);
+//        params.alignerParameters = VDJCParametersPresets.getByName("rna-seq");
+
+        params.alignerParameters.setSaveOriginalReads(true);
+
+        RunMiXCR.AlignResult align = RunMiXCR.align(params);
+        RunMiXCR.AssembleResult assemble = RunMiXCR.assemble(align);
+
+//        for (VDJCAlignments al : align.alignments) {
+//            for (int i = 0; i < al.numberOfTargets(); i++) {
+//                System.out.println(VDJCAlignmentsFormatter.getTargetAsMultiAlignment(al, i));
+//                System.out.println();
+//            }
+//            System.out.println();
+//            System.out.println(" ================================================ ");
+//            System.out.println();
+//        }
+
+
+        Assert.assertEquals(1, assemble.cloneSet.size());
+
+        Clone initialClone = assemble.cloneSet.get(0);
+        NSequenceWithQuality cdr3 = initialClone.getFeature(GeneFeature.CDR3);
+        List<VDJCAlignments> alignments = align.alignments.stream()
+                .filter(al -> cdr3.equals(al.getFeature(GeneFeature.CDR3)))
+                .collect(Collectors.toList());
+
+        alignments.stream().filter(al ->
+                Arrays.stream(al.getBestHit(GeneType.Variable).getAlignments())
+                        .filter(Objects::nonNull)
+                        .anyMatch(a -> !a.getAbsoluteMutations().isEmpty()))
+                .filter(al -> al.getBestHit(GeneType.Variable).getGene().getName().contains("3-74"))
+                .forEach(al -> {
+                    for (int i = 0; i < al.numberOfTargets(); i++) {
+                        System.out.println(VDJCAlignmentsFormatter.getTargetAsMultiAlignment(al, i));
+                        System.out.println();
+                    }
+                    System.out.println();
+                    System.out.println(" ================================================ ");
+                    System.out.println();
+                });
+
+//        System.exit(0);
+        System.out.println("=> Agg");
+        FullSeqAggregator agg = new FullSeqAggregator(initialClone, align.parameters.alignerParameters);
+        FullSeqAggregator.PreparedData prep = agg.initialRound(() -> CUtils.asOutputPort(alignments));
+        List<Clone> clones = new ArrayList<>(new CloneSet(Arrays.asList(agg.process(prep))).getClones());
+        clones.sort(Comparator.comparingDouble(Clone::getCount).reversed());
+        for (Clone clone : clones) {
             ActionExportClonesPretty.outputCompact(System.out, clone);
             System.out.println();
             System.out.println(" ================================================ ");
