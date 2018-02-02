@@ -1,6 +1,10 @@
 package com.milaboratory.mixcr.assembler.fullseq;
 
 import cc.redberry.pipe.CUtils;
+import com.milaboratory.core.Range;
+import com.milaboratory.core.alignment.Aligner;
+import com.milaboratory.core.alignment.Alignment;
+import com.milaboratory.core.alignment.LinearGapAlignmentScoring;
 import com.milaboratory.core.io.sequence.PairedRead;
 import com.milaboratory.core.io.sequence.SequenceRead;
 import com.milaboratory.core.io.sequence.SequenceReaderCloseable;
@@ -46,8 +50,8 @@ public class FullSeqAggregatorTest {
         }
 
         MasterSequence(String vPart, String cdr3Part, String jPart, String cPart) {
-            this(new NucleotideSequence(vPart), new NucleotideSequence(cdr3Part),
-                    new NucleotideSequence(jPart), new NucleotideSequence(cPart));
+            this(new NucleotideSequence(vPart.replace(" ", "")), new NucleotideSequence(cdr3Part.replace(" ", "")),
+                    new NucleotideSequence(jPart.replace(" ", "")), new NucleotideSequence(cPart.replace(" ", "")));
         }
 
         NucleotideSequence getRange(int vPadd, int jPadd) {
@@ -79,13 +83,13 @@ public class FullSeqAggregatorTest {
                     "GCACAGGCTGGGTGCCCCTACCCCAGGCCCTTCACACACAGGGGCAGGTGCTTGGCTCAGACCTGCCAAAAGCCATATCCGG");
 
     static final MasterSequence masterSeq1VDel1JDel1 = new MasterSequence(
-            "CTGAAGAAAACCAGCCCTGCAGCTCTGGAGAGGAGCCCCAGCCCTGGGATTCCCAGCTGTTTCTGCTTGCTGATCAGGACTGCACACAGAGAACTCACC" +
+            "CTGAAGAAAACCAGCCCTGCAGCTCTGGGAGAGGAGCCCCAGCCCTGGGATTCCCAGCTGTTTCTGCTTGCTGATCAGGACTGCACACAGAGAACTCACC" +
                     "ATGGAGTTTGGGCTGAGCTGGGTTTTCCTTGTTGCTATTTTAAAAGGTGTCCAGTGTGAGGTGCAGCTGGTGGAGTCCGGGGGAGGCTTAGTTCAGCC" +
-                    "TGGGGGGTCCCTGAGACTCTCCTGTGCAGCCTCTGATTCACCTTCAGTAGCTACTGGATGCACTGGGTCCGCCAAGCTCCAGGGAAGGGGCTGGTGT" +
-                    "GGGTCTCACGTATTAATAGTGATGGGAGTAGCACAAGCTACGCGGACTCCGTGAAGGGCCGATTCACCATCTCCAGAGACAACGCCAAGAACACGCTG" +
+                    "TGGGGGGTCCCTGAGACTCTCCTGTGCAGCCTCTGGATTCACCTTCAGTAGCTACTGGATGCACTGGGTCCGCCAAGCTCCAGGGAAGGGGCTGGTGT" +
+                    "GGGTCTCACGTATTAATAGTGATGGGAGTAGCACAAGCTACGCGGACTCCGTGAAGGGCCGATTCACCATCTCCAGAACAACGCCAAGAACACGCTG" +
                     "TATCTGCAAATGAACAGTCTGAGAGCCGAGGACACGGCTGTGTATTAC",
             "TGTGCAAGAGGGCCCCAAGAAAATAGTGGTTATTACTACGGGTTTGACTACTGG",
-            "GGCCAGGGAACCCTGGTCACCTCTCCTCAG",
+            "GGCCAGGGAACCCTGGTC CCGTCTCCTCAG",
             "CCTCCACCAAGGGCCCATCGGTCTTCCCCCTGGCGCCCTGCTCCAGGAGCACCTCCGAGAGCACAGCGGCCCTGGGCTGCCTGGTCAAGGACTACTTCCC" +
                     "CGAACCGGTGACGGTGTCGTGGAACTCAGGCGCTCTGACCAGCGGCGTGCACACCTTCCCGGCTGTCCTACAGTCCTCAGGACTCTACTCCCTCAGCA" +
                     "GCGTGGTGACCGTGCCCTCCAGCAACTTCGGCACCCAGACCTACACCTGCAACGTAGATCACAAGCCCAGCAACACCAAGGTGGACAAGACAGTTGGT" +
@@ -94,13 +98,29 @@ public class FullSeqAggregatorTest {
                     "GCACAGGCTGGGTGCCCCTACCCCAGGCCCTTCACACACAGGGGCAGGTGCTTGGCTCAGACCTGCCAAAAGCCATATCCGG");
 
     static final MasterSequence masterSeq1VDel1JDelVSub2 = new MasterSequence(
-            "CTGAAGAAAACCAGCCCTGCAGCTCTGGAGAGGAGCCCCAGCCCTGGGATTCCCAGCTGTTTCTGCTTGCTGATCAGGACTGCACACAGAGAACTCACC" +
+            "CTGAAGAAAACCAGCCCTGCAGCTCTGGGAGAGGAGCCCCAGCCCTGGGATTCCCAGCTGTTTCTGCTTGCTGATCAGGACTGCACACAGAGAACTCACC" +
                     "ATGGAGTTTGGGCTGAGCTGGGTTTTCCTTGTTGCTATTTTAAAAGGTGTCCAGTGTGAGGTGCAGCTGGTGGAGTCCGGGGGAGGCTTAGTTCAGCC" +
-                    "TGGGGGGTCCCTGAGACTCTCCTGTGCAGCCTCTGATTCACCTTCATTAGCTACTGGATGCACTGGGTCCGCCAAGCTCCAGGGAAGGGGCTGGTGT" +
-                    "AGGTCTCACGTATTAATAGTGATGGGAGTAGCACAAGCTACGCGGACTCCGTGAAGGGCCGATTCACCATCTCCAGAGACAACGCCAAGAACACGCTG" +
+                    "TGGGGGGTCCCTGAGACTCTCCTGTGCAGCCTCTGGATTCACCTTCAGTAGCTACTGGATGCACTGGGTCCGCCAAGCTCCAGGGAAGGGGCTGGTGT" +
+                    "GGGTCTCACGTATTAATAGTGATtGGAGTAGCACAAGCTACGCGGACTCCGTGAAGGGCCGtTTCACCATCTCCAGAGACAACGCCAAGAACACGTG" +
                     "TATCTGCAAATGAACAGTCTGAGAGCCGAGGACACGGCTGTGTATTAC",
             "TGTGCAAGAGGGCCCCAAGAAAATAGTGGTTATTACTACGGGTTTGACTACTGG",
-            "GGCCAGGGAACCCTGGTCACCTCTCCTCAG",
+            "GGCCAGGGAACCCTGGTCACCGTCTCTCAG",
+            "CCTCCACCAAGGGCCCATCGGTCTTCCCCCTGGCGCCCTGCTCCAGGAGCACCTCCGAGAGCACAGCGGCCCTGGGCTGCCTGGTCAAGGACTACTTCCC" +
+                    "CGAACCGGTGACGGTGTCGTGGAACTCAGGCGCTCTGACCAGCGGCGTGCACACCTTCCCGGCTGTCCTACAGTCCTCAGGACTCTACTCCCTCAGCA" +
+                    "GCGTGGTGACCGTGCCCTCCAGCAACTTCGGCACCCAGACCTACACCTGCAACGTAGATCACAAGCCCAGCAACACCAAGGTGGACAAGACAGTTGGT" +
+                    "GAGAGGCCAGCTCAGGGAGGGAGGGTGTCTGCTGGAAGCCAGGCTCAGCCCTCCTGCCTGGACGCACCCCGGCTGTGCAGCCCCAGCCCAGGGCAGCA" +
+                    "AGGCAGGCCCCATCTGTCTCCTCACCCGGAGGCCTCTGCCCGCCCCACTCATGCTCAGGGAGAGGGTCTTCTGGCTTTTTCCACCAGGCTCCAGGCAG" +
+                    "GCACAGGCTGGGTGCCCCTACCCCAGGCCCTTCACACACAGGGGCAGGTGCTTGGCTCAGACCTGCCAAAAGCCATATCCGG");
+
+
+    static final MasterSequence masterSeq1VSub1 = new MasterSequence(
+            "CTGAAGAAAACCAGCCCTGCAGCTCTGGGAGAGGAGCCCCAGCCCTGGGATTCCCAGCTGTTTCTGCTTGCTGATCAGGACTGCACACAGAGAACTCACC" +
+                    "ATGGAGTTTGGGCTGAGCTGGGTTTTCCTTGTTGCTATTTTAAAAGGTGTCCAGTGTGAGGTGCAGCTGGTGGAGTCCGGGGGAGGCTTAGTTCAGCC" +
+                    "TGGGGGGTCCCTGAGACTCTCCTGTGCAGCCTCTGGATTCACCTTCAGTAGCTACTGGATGCACTGGGTCCGCCAAGCTCCAGGGAAGGGGCTGGTGT" +
+                    "GGGTCTCACGTATTAATAGTGATGGGAGTAGCACAAGCTACGCGGACTCCtTGAAGGGCCGATTCACCATCTCCAGAGACAACGCCAAGAACACGCTG" +
+                    "TATCTGCAAATGAACAGTCTGAGAGCCGAGGACACGGCTGTGTATTAC",
+            "TGTGCAAGAGGGCCCCAAGAAAATAGTGGTTATTACTACGGGTTTGACTACTGG",
+            "GGCCAGGGAACCCTGGTCACCGTCTCCTCAG",
             "CCTCCACCAAGGGCCCATCGGTCTTCCCCCTGGCGCCCTGCTCCAGGAGCACCTCCGAGAGCACAGCGGCCCTGGGCTGCCTGGTCAAGGACTACTTCCC" +
                     "CGAACCGGTGACGGTGTCGTGGAACTCAGGCGCTCTGACCAGCGGCGTGCACACCTTCCCGGCTGTCCTACAGTCCTCAGGACTCTACTCCCTCAGCA" +
                     "GCGTGGTGACCGTGCCCTCCAGCAACTTCGGCACCCAGACCTACACCTGCAACGTAGATCACAAGCCCAGCAACACCAAGGTGGACAAGACAGTTGGT" +
@@ -124,20 +144,6 @@ public class FullSeqAggregatorTest {
                     "AGGCAGGCCCCATCTGTCTCCTCACCCGGAGGCCTCTGCCCGCCCCACTCATGCTCAGGGAGAGGGTCTTCTGGCTTTTTCCACCAGGCTCCAGGCAG" +
                     "GCACAGGCTGGGTGCCCCTACCCCAGGCCCTTCACACACAGGGGCAGGTGCTTGGCTCAGACCTGCCAAAAGCCATATCCGG");
 
-    static final MasterSequence masterSeq1VSub1 = new MasterSequence(
-            "CTGAAGAAAACCAGCCCTGCAGCTCTGGGAGAGGAGCCCCAGCCCTGGGATTCCCAGCTGTTTCTGCTTGCTGATCAGGACTGCACACAGAGAACTCACC" +
-                    "ATGGAGTTTGGGCTGAGCTGGGTTTTCCTTGTTGCTATTTTAAAAGGTGTCCAGTGTGAGGTGCAGCTGGTGGAGTCCGGGGGAGGCTTAGTTCAGCC" +
-                    "TGGGGGGTCCCTGAGACTCTCCTGTGCAGCCTCTGGATTCACCTTCAGTAGCTACTGGATGCACTGGGTCCGCCAAGCTCCAGGGAAGGGGCTGGTGT" +
-                    "GGGTCTCACGTATTAATAGTGATGGGAGTAGCACAAGCTACGCGGACTCCGTGAAGGGCCGATTCACCATCTCCAGAGACAACGCCAAGAACACGCTG" +
-                    "TATCTGCAAATGAACAGTCTcAGAGCCGAGGACACGGCTGTGTATTAC",
-            "TGTGCAAGAGGGCCCCAAGAAAATAGTGGTTATTACTACGGGTTTGACTACTGG",
-            "GGCCAGGGAACCCTGGTCACCGTCTCCTCAG",
-            "CCTCCACCAAGGGCCCATCGGTCTTCCCCCTGGCGCCCTGCTCCAGGAGCACCTCCGAGAGCACAGCGGCCCTGGGCTGCCTGGTCAAGGACTACTTCCC" +
-                    "CGAACCGGTGACGGTGTCGTGGAACTCAGGCGCTCTGACCAGCGGCGTGCACACCTTCCCGGCTGTCCTACAGTCCTCAGGACTCTACTCCCTCAGCA" +
-                    "GCGTGGTGACCGTGCCCTCCAGCAACTTCGGCACCCAGACCTACACCTGCAACGTAGATCACAAGCCCAGCAACACCAAGGTGGACAAGACAGTTGGT" +
-                    "GAGAGGCCAGCTCAGGGAGGGAGGGTGTCTGCTGGAAGCCAGGCTCAGCCCTCCTGCCTGGACGCACCCCGGCTGTGCAGCCCCAGCCCAGGGCAGCA" +
-                    "AGGCAGGCCCCATCTGTCTCCTCACCCGGAGGCCTCTGCCCGCCCCACTCATGCTCAGGGAGAGGGTCTTCTGGCTTTTTCCACCAGGCTCCAGGCAG" +
-                    "GCACAGGCTGGGTGCCCCTACCCCAGGCCCTTCACACACAGGGGCAGGTGCTTGGCTCAGACCTGCCAAAAGCCATATCCGG");
 
     static final MasterSequence masterSeq1VLargeIns1Sub1 = new MasterSequence(
             "CTGAAGAAAACCAGCCCTGCAGCTCTGGGAGAGGAGCCCCAGCCCTGGGATTCCCAGCTGTTTCTGCTTGCTGATCAGGACTGCACACAGAGAACTCACC" +
@@ -158,8 +164,13 @@ public class FullSeqAggregatorTest {
     public void testRandom1() throws Exception {
         CloneFraction[] clones = {
                 new CloneFraction(1000, masterSeq1WT),
+                //V: S346:G->T
                 new CloneFraction(1000, masterSeq1VSub1),
+                //V: D373:G
+                //J: D55:A
                 new CloneFraction(1000, masterSeq1VDel1JDel1),
+                //V: S319:G->T,S357:A->T,D391:C
+                //J: D62:C
                 new CloneFraction(1000, masterSeq1VDel1JDelVSub2),
         };
 
@@ -167,7 +178,7 @@ public class FullSeqAggregatorTest {
         rand.setSeed(12345);
         RandomDataGenerator rdg = new RandomDataGenerator(rand);
 
-        List<PairedRead> readsOrig = new ArrayList<>();
+        List<SequenceRead> readsOrig = new ArrayList<>();
 
         int readLength = 100;
 
@@ -190,8 +201,10 @@ public class FullSeqAggregatorTest {
             }
         }
 
+//        readsOrig = Arrays.asList(setReadId(0, readsOrig.get(12)), setReadId(1, readsOrig.get(13)));
+
         int[] perm = rdg.nextPermutation(readsOrig.size(), readsOrig.size());
-        List<PairedRead> reads = new ArrayList<>();
+        List<SequenceRead> reads = new ArrayList<>();
         for (int i = 0; i < readsOrig.size(); i++)
             reads.add(readsOrig.get(perm[i]));
 
@@ -239,14 +252,24 @@ public class FullSeqAggregatorTest {
 
         FullSeqAggregator agg = new FullSeqAggregator(assemble.cloneSet.get(0), align.parameters.alignerParameters);
 
-        FullSeqAggregator.PreparedData prep = agg.initialRound(() -> CUtils.asOutputPort(
+        FullSeqAggregator.RawVariantsData prep = agg.calculateRawData(() -> CUtils.asOutputPort(
                 align.alignments.stream().filter(a -> a.getFeature(GeneFeature.CDR3) != null).collect(Collectors.toList())
         ));
 
-        List<Clone> clns = new ArrayList<>(new CloneSet(Arrays.asList(agg.process(prep))).getClones());
+        List<Clone> clns = new ArrayList<>(new CloneSet(Arrays.asList(agg.callVariants(prep))).getClones());
         clns.sort(Comparator.comparingDouble(Clone::getCount).reversed());
-        for (Clone clone : clns)
-            ActionExportClonesPretty.outputCompact(System.out, clone);
+
+        System.out.println("# Clones: " + clns.size());
+        id = 0;
+        for (Clone clone : clns) {
+            clone = clone.setId(id++);
+            System.out.println(clone.getCount());
+            System.out.println(clone.getFraction());
+            System.out.println(clone.getBestHit(GeneType.Variable).getAlignment(0).getAbsoluteMutations());
+            System.out.println(clone.getBestHit(GeneType.Joining).getAlignment(0).getAbsoluteMutations());
+            System.out.println();
+//            ActionExportClonesPretty.outputCompact(System.out, clone);
+        }
     }
 
     public static class CloneFraction {
@@ -291,15 +314,15 @@ public class FullSeqAggregatorTest {
 
         FullSeqAggregator agg = new FullSeqAggregator(assemble.cloneSet.get(0), align.parameters.alignerParameters);
 
-        PointSequence[] r2s = agg.convertToPointSequences(align.alignments.get(1));
+        PointSequence[] r2s = agg.toPointSequences(align.alignments.get(1));
         TIntHashSet p2 = new TIntHashSet(Arrays.stream(r2s).mapToInt(s -> s.point).toArray());
         Assert.assertEquals(260 - masterSeq1WT.cdr3Part, p2.size());
 
-        PointSequence[] r1s = agg.convertToPointSequences(align.alignments.get(0));
+        PointSequence[] r1s = agg.toPointSequences(align.alignments.get(0));
         TIntHashSet p1 = new TIntHashSet(Arrays.stream(r1s).mapToInt(s -> s.point).toArray());
         Assert.assertEquals(280 - masterSeq1WT.cdr3Part, p1.size());
 
-        FullSeqAggregator.PreparedData prep = agg.initialRound(() -> CUtils.asOutputPort(align.alignments));
+        FullSeqAggregator.RawVariantsData prep = agg.calculateRawData(() -> CUtils.asOutputPort(align.alignments));
 
         long uniq1 = StreamSupport.stream(CUtils.it(prep.createPort()).spliterator(), false)
                 .mapToInt(l -> l[0])
@@ -311,7 +334,7 @@ public class FullSeqAggregatorTest {
         Assert.assertEquals(40, uniq1);
         Assert.assertEquals(60, uniq2);
 
-        for (Clone clone : new CloneSet(Arrays.asList(agg.process(prep))).getClones()) {
+        for (Clone clone : new CloneSet(Arrays.asList(agg.callVariants(prep))).getClones()) {
             ActionExportClonesPretty.outputCompact(System.out, clone);
             System.out.println();
             System.out.println(" ================================================ ");
@@ -400,8 +423,8 @@ public class FullSeqAggregatorTest {
 //        System.exit(0);
         System.out.println("=> Agg");
         FullSeqAggregator agg = new FullSeqAggregator(initialClone, align.parameters.alignerParameters);
-        FullSeqAggregator.PreparedData prep = agg.initialRound(() -> CUtils.asOutputPort(alignments));
-        List<Clone> clones = new ArrayList<>(new CloneSet(Arrays.asList(agg.process(prep))).getClones());
+        FullSeqAggregator.RawVariantsData prep = agg.calculateRawData(() -> CUtils.asOutputPort(alignments));
+        List<Clone> clones = new ArrayList<>(new CloneSet(Arrays.asList(agg.callVariants(prep))).getClones());
         clones.sort(Comparator.comparingDouble(Clone::getCount).reversed());
         for (Clone clone : clones) {
             ActionExportClonesPretty.outputCompact(System.out, clone);
@@ -409,5 +432,16 @@ public class FullSeqAggregatorTest {
             System.out.println(" ================================================ ");
             System.out.println();
         }
+    }
+
+    @Test
+    public void test2() throws Exception {
+        Alignment<NucleotideSequence> al = Aligner.alignGlobal(LinearGapAlignmentScoring.getNucleotideBLASTScoring(),
+                new NucleotideSequence("atgcatgc"),
+                new NucleotideSequence("atgctgc"));
+
+        for (int i = 0; i < al.getSequence1Range().length(); ++i)
+            System.out.println(al.convertToSeq2Range(new Range(i, i + 1)));
+//        new Alignment<>()
     }
 }
