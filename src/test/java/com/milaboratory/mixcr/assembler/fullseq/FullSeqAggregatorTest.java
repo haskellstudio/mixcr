@@ -163,7 +163,7 @@ public class FullSeqAggregatorTest {
     @Test
     public void testRandom1() throws Exception {
         CloneFraction[] clones = {
-                new CloneFraction(1000, masterSeq1WT),
+                new CloneFraction(750, masterSeq1WT),
                 //V: S346:G->T
                 new CloneFraction(1000, masterSeq1VSub1),
                 //V: D373:G
@@ -171,7 +171,7 @@ public class FullSeqAggregatorTest {
                 new CloneFraction(1000, masterSeq1VDel1JDel1),
                 //V: S319:G->T,S357:A->T,D391:C
                 //J: D62:C
-                new CloneFraction(1000, masterSeq1VDel1JDelVSub2),
+                new CloneFraction(500, masterSeq1VDel1JDelVSub2),
         };
 
         Well19937c rand = new Well19937c();
@@ -263,6 +263,7 @@ public class FullSeqAggregatorTest {
         id = 0;
         for (Clone clone : clns) {
             clone = clone.setId(id++);
+            System.out.println(clone.numberOfTargets());
             System.out.println(clone.getCount());
             System.out.println(clone.getFraction());
             System.out.println(clone.getBestHit(GeneType.Variable).getAlignment(0).getAbsoluteMutations());

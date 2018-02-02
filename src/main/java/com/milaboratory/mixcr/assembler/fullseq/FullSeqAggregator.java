@@ -49,7 +49,9 @@ final class FullSeqAggregator {
      */
     final long decisiveSumQualityThreshold = 120;
 
-    final int edgePadding = 0;
+    final int edgePadding = 7;
+    final int alignmentEdgeDelta = 3;
+    final double minimalNonEdgePointsFraction = 0.25;
 
     final VDJCAlignerParameters alignerParameters;
 
@@ -635,7 +637,7 @@ final class FullSeqAggregator {
         for (int readId = targetReads.nextSetBit(0); readId >= 0; readId = targetReads.nextSetBit(readId + 1)) {
             if (pointVariantInfos[readId] != ABSENT_PACKED_VARIANT_INFO) {
                 targets[i++] = ((long) pointVariantInfos[readId]) << 32 | readId;
-                totalSumQuality += 0xFF & pointVariantInfos[readId];
+                totalSumQuality += 0x7F & pointVariantInfos[readId];
             } else
                 unassignedVariants.set(readId);
         }
@@ -647,6 +649,8 @@ final class FullSeqAggregator {
         int currentIndex = 0;
         long variantSumQuality = 0;
 
+        int nonEdgePoints = 0;
+
         // Will be used if no significant variant is found
         int bestVariant = -1;
         int bestVariantSumQuality = -1;
@@ -655,9 +659,10 @@ final class FullSeqAggregator {
         do {
             if (currentIndex == count || currentVariant != (int) (targets[currentIndex] >>> 40)) {
                 // Checking significance conditions
-                if ((variantSumQuality >= minimalSumQuality
+                if ((1.0 * nonEdgePoints / (currentIndex - blockBegin) >= minimalNonEdgePointsFraction)
+                        && ((variantSumQuality >= minimalSumQuality
                         && variantSumQuality >= minimalQualityShare * totalSumQuality)
-                        || variantSumQuality >= decisiveSumQualityThreshold) {
+                        || variantSumQuality >= decisiveSumQualityThreshold)) {
                     // Variant is significant
                     BitSet reads = new BitSet();
                     for (int j = currentIndex - 1; j >= blockBegin; --j)
@@ -676,12 +681,19 @@ final class FullSeqAggregator {
                 }
 
                 if (currentIndex != count) {
-                    variantSumQuality = 0xFF & (targets[currentIndex] >>> 32);
                     blockBegin = currentIndex;
+                    variantSumQuality = 0x7F & (targets[blockBegin] >>> 32);
                     currentVariant = (int) (targets[blockBegin] >>> 40);
+
+                    nonEdgePoints = 0;
+                    if (((targets[blockBegin] >>> 32) & 0x80) == 0)
+                        ++nonEdgePoints;
                 }
-            } else
-                variantSumQuality += 0xFF & (targets[currentIndex] >>> 32);
+            } else {
+                if (((targets[currentIndex] >>> 32) & 0x80) == 0)
+                    ++nonEdgePoints;
+                variantSumQuality += 0x7F & (targets[currentIndex] >>> 32);
+            }
         } while (++currentIndex <= count);
 
         if (variants.isEmpty()) {
@@ -693,7 +705,7 @@ final class FullSeqAggregator {
             reads.or(unassignedVariants);
             // nSignificant = 1 (will not be practically used, only one variant, don't care)
             return Collections.singletonList(
-                    new Variant(bestVariant << 8 | Math.min(SequenceQuality.MAX_QUALITY_VALUE, 0),
+                    new Variant(bestVariant << 8 | Math.min(SequenceQuality.MAX_QUALITY_VALUE, bestVariantSumQuality),
                             reads, 1));
         } else {
             for (Variant variant : variants)
@@ -759,7 +771,7 @@ final class FullSeqAggregator {
                     map.put(point.point, var = new VariantAggregator());
 
                 var.count += 1;
-                var.sumQuality += point.quality;
+                var.sumQuality += 0x7F & point.quality;
             }
         }
 
@@ -789,7 +801,7 @@ final class FullSeqAggregator {
                 int pointIndex = revIndex.get(point.point);
                 packedData[pointIndex][i] =
                         (sequenceToVariantId.get(point.sequence.getSequence()) << 8)
-                                | point.quality;
+                                | (0xFF & point.quality);
             }
             i++;
         }
@@ -954,10 +966,8 @@ final class FullSeqAggregator {
             byte left = from > 0 ? seq.getQuality().value(from - 1) : -1;
             byte right = from + 1 < seq.size() ? seq.getQuality().value(from + 1) : -1;
             byte quality;
-            if ((seq2alignmentRange.getTo() == seq.size() && seq.size() - to < edgePadding)
-                    || (seq2alignmentRange.getFrom() == 0 && from < edgePadding))
-                quality = 0;
-            else if (left == -1 && right == -1)
+
+            if (left == -1 && right == -1)
                 quality = 0;
             else if (left == -1)
                 quality = right;
@@ -965,15 +975,18 @@ final class FullSeqAggregator {
                 quality = left;
             else
                 quality = (byte) (((int) left + right) / 2);
+
+            if ((seq.size() - seq2alignmentRange.getTo() < alignmentEdgeDelta && seq.size() - to <= edgePadding)
+                    || (seq2alignmentRange.getFrom() < alignmentEdgeDelta && from <= edgePadding))
+                quality |= 0x80;
+
             return new PointSequence(point, NSequenceWithQuality.EMPTY, quality);
         }
         NSequenceWithQuality r = seq.getRange(from, to);
-        byte quality;
-        if ((seq2alignmentRange.getTo() == seq.size() && seq.size() - to < edgePadding)
-                || (seq2alignmentRange.getFrom() == 0 && from < edgePadding))
-            quality = 0;
-        else
-            quality = r.getQuality().minValue();
+        byte quality = r.getQuality().minValue();
+        if ((seq.size() - seq2alignmentRange.getTo() < alignmentEdgeDelta && seq.size() - to <= edgePadding)
+                || (seq2alignmentRange.getFrom() < alignmentEdgeDelta && from <= edgePadding))
+            quality |= 0x80;
         return new PointSequence(point, r, quality);
     }
 }
