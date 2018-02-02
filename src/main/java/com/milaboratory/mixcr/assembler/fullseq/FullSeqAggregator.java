@@ -16,6 +16,7 @@ import gnu.trove.iterator.TIntIntIterator;
 import gnu.trove.map.hash.TIntIntHashMap;
 import gnu.trove.map.hash.TIntObjectHashMap;
 import gnu.trove.map.hash.TObjectIntHashMap;
+import gnu.trove.set.hash.TIntHashSet;
 import io.repseq.core.GeneFeature;
 import io.repseq.core.GeneType;
 import io.repseq.core.ReferencePoint;
@@ -48,7 +49,7 @@ final class FullSeqAggregator {
      */
     final long decisiveSumQualityThreshold = 120;
 
-    final int edgePadding = 15;
+    final int edgePadding = 0;
 
     final VDJCAlignerParameters alignerParameters;
 
@@ -142,14 +143,58 @@ final class FullSeqAggregator {
             branches = newBranches;
         }
 
+        clusterizeBranches(data.points, branches);
+
         return branches.stream()
-                .sorted(Comparator.comparingDouble(v -> -v.count))
                 .map(branch -> buildClone(branch.count, assembleBranchSequences(data.points, branch)))
                 .toArray(Clone[]::new);
     }
 
+    private void clusterizeBranches(int[] points, List<VariantBranch> branches) {
+        branches.sort(Comparator.comparingDouble(c -> c.count));
+
+        TIntHashSet[] observedVariants = new TIntHashSet[points.length];
+        for (int i = 0; i < observedVariants.length; i++)
+            observedVariants[i] = new TIntHashSet();
+
+        for (int i = branches.size() - 1; i >= 0; --i) {
+            VariantBranch branch = branches.get(i);
+
+            boolean newBranch = false;
+            for (int j = 0; j < branch.pointStates.length; j++)
+                if (observedVariants[j].add(branch.pointStates[j] >>> 8))
+                    newBranch = true;
+
+            if (newBranch)
+                continue;
+
+            double sumWeight = 0;
+            double[] weights = new double[branches.size() - i - 1];
+            for (int j = i + 1; j < branches.size(); ++j) {
+                VariantBranch cluster = branches.get(j);
+
+                double sumQuality = 0;
+                for (int k = 0; k < branch.pointStates.length; ++k)
+                    if (branch.pointStates[k] >>> 8 != cluster.pointStates[k] >>> 8)
+                        sumQuality += Math.min(branch.pointStates[k] & 0xFF, cluster.pointStates[k] & 0xFF);
+
+                weights[j - i - 1] = Math.pow(10.0, -sumQuality / 10.0);
+                sumWeight += weights[j - i - 1];
+            }
+
+            for (int j = i + 1; j < branches.size(); ++j) {
+                VariantBranch cluster = branches.get(j);
+                cluster.count += branch.count * weights[j - i - 1] / sumWeight;
+            }
+
+            branches.remove(i);
+        }
+
+        branches.sort(Comparator.comparingDouble(c -> -c.count));
+    }
+
     private static class VariantBranch {
-        final double count;
+        double count; // non-final, since will be modified
         final int[] pointStates;
         final BitSet reads;
 
@@ -870,7 +915,7 @@ final class FullSeqAggregator {
 
         Range
                 alSeq2Range = alignment.getSequence2Range(),
-                alSeq2RangeIntersection = alSeq2Range.intersection(seq2Range),
+                alSeq2RangeIntersection = alSeq2Range.intersectionWithTouch(seq2Range),
                 alSeq1RangeIntersection = alignment.convertToSeq1Range(alSeq2RangeIntersection);
 
         assert alSeq1RangeIntersection != null;
