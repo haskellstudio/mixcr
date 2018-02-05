@@ -143,22 +143,28 @@ public final class CloneSetIO {
     }
 
     public static CloneSet read(File file) throws IOException {
-        try (InputStream inputStream = IOUtil.createIS(file)) {
-            return read(inputStream);
-        }
+        return read(file, VDJCLibraryRegistry.getDefault());
     }
 
     public static CloneSet read(File file, VDJCLibraryRegistry libraryRegistry) throws IOException {
-        try (InputStream inputStream = IOUtil.createIS(file)) {
-            return read(inputStream, libraryRegistry);
+        switch (IOUtil.detectFilType(file)) {
+            case ClnA:
+                try (ClnAReader r = new ClnAReader(file.toPath(), libraryRegistry)) {
+                    return r.readCloneSet();
+                }
+            case Clns:
+                try (InputStream inputStream = IOUtil.createIS(file)) {
+                    return readClns(inputStream, libraryRegistry);
+                }
+            default: throw new RuntimeException("Unsupported file type");
         }
     }
 
-    public static CloneSet read(InputStream inputStream) {
-        return read(inputStream, VDJCLibraryRegistry.getDefault());
+    public static CloneSet readClns(InputStream inputStream) {
+        return readClns(inputStream, VDJCLibraryRegistry.getDefault());
     }
 
-    public static CloneSet read(InputStream inputStream, VDJCLibraryRegistry libraryRegistry) {
+    public static CloneSet readClns(InputStream inputStream, VDJCLibraryRegistry libraryRegistry) {
         PrimitivI input = new PrimitivI(inputStream);
 
         // Registering custom serializer

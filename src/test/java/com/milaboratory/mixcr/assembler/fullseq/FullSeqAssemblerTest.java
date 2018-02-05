@@ -1,10 +1,6 @@
 package com.milaboratory.mixcr.assembler.fullseq;
 
 import cc.redberry.pipe.CUtils;
-import com.milaboratory.core.Range;
-import com.milaboratory.core.alignment.Aligner;
-import com.milaboratory.core.alignment.Alignment;
-import com.milaboratory.core.alignment.LinearGapAlignmentScoring;
 import com.milaboratory.core.io.sequence.PairedRead;
 import com.milaboratory.core.io.sequence.SequenceRead;
 import com.milaboratory.core.io.sequence.SequenceReaderCloseable;
@@ -17,6 +13,7 @@ import com.milaboratory.mixcr.basictypes.CloneSet;
 import com.milaboratory.mixcr.basictypes.VDJCAlignments;
 import com.milaboratory.mixcr.basictypes.VDJCAlignmentsFormatter;
 import com.milaboratory.mixcr.cli.ActionExportClonesPretty;
+import com.milaboratory.mixcr.cli.Main;
 import com.milaboratory.mixcr.util.RunMiXCR;
 import com.milaboratory.mixcr.vdjaligners.VDJCParametersPresets;
 import gnu.trove.set.hash.TIntHashSet;
@@ -35,7 +32,10 @@ import java.util.stream.StreamSupport;
 /**
  *
  */
-public class FullSeqAggregatorTest {
+public class FullSeqAssemblerTest {
+    static final FullSeqAssemblerParameters DEFAULT_PARAMETERS =
+            new FullSeqAssemblerParameters(0.1, 80, 120,
+                    3, 7, 0.25, GeneFeature.VDJRegion);
 
     static final class MasterSequence {
         final int vPart, cdr3Part, jPart, cPart;
@@ -250,9 +250,9 @@ public class FullSeqAggregatorTest {
         RunMiXCR.AssembleResult assemble = RunMiXCR.assemble(align);
         Assert.assertEquals(1, assemble.cloneSet.size());
 
-        FullSeqAggregator agg = new FullSeqAggregator(assemble.cloneSet.get(0), align.parameters.alignerParameters);
+        FullSeqAssembler agg = new FullSeqAssembler(DEFAULT_PARAMETERS, assemble.cloneSet.get(0), align.parameters.alignerParameters);
 
-        FullSeqAggregator.RawVariantsData prep = agg.calculateRawData(() -> CUtils.asOutputPort(
+        FullSeqAssembler.RawVariantsData prep = agg.calculateRawData(() -> CUtils.asOutputPort(
                 align.alignments.stream().filter(a -> a.getFeature(GeneFeature.CDR3) != null).collect(Collectors.toList())
         ));
 
@@ -313,7 +313,7 @@ public class FullSeqAggregatorTest {
 
         RunMiXCR.AssembleResult assemble = RunMiXCR.assemble(align);
 
-        FullSeqAggregator agg = new FullSeqAggregator(assemble.cloneSet.get(0), align.parameters.alignerParameters);
+        FullSeqAssembler agg = new FullSeqAssembler(DEFAULT_PARAMETERS, assemble.cloneSet.get(0), align.parameters.alignerParameters);
 
         PointSequence[] r2s = agg.toPointSequences(align.alignments.get(1));
         TIntHashSet p2 = new TIntHashSet(Arrays.stream(r2s).mapToInt(s -> s.point).toArray());
@@ -323,7 +323,7 @@ public class FullSeqAggregatorTest {
         TIntHashSet p1 = new TIntHashSet(Arrays.stream(r1s).mapToInt(s -> s.point).toArray());
         Assert.assertEquals(280 - masterSeq1WT.cdr3Part, p1.size());
 
-        FullSeqAggregator.RawVariantsData prep = agg.calculateRawData(() -> CUtils.asOutputPort(align.alignments));
+        FullSeqAssembler.RawVariantsData prep = agg.calculateRawData(() -> CUtils.asOutputPort(align.alignments));
 
         long uniq1 = StreamSupport.stream(CUtils.it(prep.createPort()).spliterator(), false)
                 .mapToInt(l -> l[0])
@@ -345,7 +345,7 @@ public class FullSeqAggregatorTest {
 
     @Test
     public void testLargeCloneNoMismatches() throws Exception {
-        MasterSequence master = FullSeqAggregatorTest.masterSeq1WT;
+        MasterSequence master = FullSeqAssemblerTest.masterSeq1WT;
 
         NSequenceWithQuality
                 seq = new NSequenceWithQuality(
@@ -423,8 +423,8 @@ public class FullSeqAggregatorTest {
 
 //        System.exit(0);
         System.out.println("=> Agg");
-        FullSeqAggregator agg = new FullSeqAggregator(initialClone, align.parameters.alignerParameters);
-        FullSeqAggregator.RawVariantsData prep = agg.calculateRawData(() -> CUtils.asOutputPort(alignments));
+        FullSeqAssembler agg = new FullSeqAssembler(DEFAULT_PARAMETERS, initialClone, align.parameters.alignerParameters);
+        FullSeqAssembler.RawVariantsData prep = agg.calculateRawData(() -> CUtils.asOutputPort(alignments));
         List<Clone> clones = new ArrayList<>(new CloneSet(Arrays.asList(agg.callVariants(prep))).getClones());
         clones.sort(Comparator.comparingDouble(Clone::getCount).reversed());
         for (Clone clone : clones) {
@@ -437,12 +437,7 @@ public class FullSeqAggregatorTest {
 
     @Test
     public void test2() throws Exception {
-        Alignment<NucleotideSequence> al = Aligner.alignGlobal(LinearGapAlignmentScoring.getNucleotideBLASTScoring(),
-                new NucleotideSequence("atgcatgc"),
-                new NucleotideSequence("atgctgc"));
-
-        for (int i = 0; i < al.getSequence1Range().length(); ++i)
-            System.out.println(al.convertToSeq2Range(new Range(i, i + 1)));
-//        new Alignment<>()
+        Main.main("assembleContigs", "-f", "/Users/poslavskysv/Projects/milab/temp/hui.clna", "/Users/poslavskysv/Projects/milab/temp/hui2.clns");
     }
+
 }

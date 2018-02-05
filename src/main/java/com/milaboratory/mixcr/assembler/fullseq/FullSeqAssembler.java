@@ -33,26 +33,33 @@ import static io.repseq.core.GeneType.Variable;
 
 /**
  */
-final class FullSeqAggregator {
+public final class FullSeqAssembler {
     private static int ABSENT_PACKED_VARIANT_INFO = -1;
-
+    /** initial clone */
     final Clone clone;
+    /** clone assembled feature (must cover CDR3) */
     final GeneFeature assemblingFeature;
+    /** top hit genes */
     final VDJCGenes genes;
-    final boolean hasV, hasJ;
-    final int nLeftDummies, lengthV, assemblingFeatureLength, jOffset, jLength, rightAssemblingFeatureBound;
-
-    final double minimalQualityShare = 0.1;
-    final long minimalSumQuality = 80;
-    /**
-     * Even if other criteria are not met, but sum quality reaches this threshold, variant is marked as significant.
-     */
-    final long decisiveSumQualityThreshold = 120;
-
-    final int edgePadding = 7;
-    final int alignmentEdgeDelta = 3;
-    final double minimalNonEdgePointsFraction = 0.25;
-
+    /** whether V/J genes are aligned */
+    final boolean hasV, hasJ; // always trues for now
+    /** number of letters to the left of reference V gene in the global coordinate grid */
+    final int nLeftDummies;
+    /** length of aligned part of reference V gene */
+    final int lengthV;
+    /** length of aligned part of reference J gene */
+    final int jLength;
+    /** length of assembling feature in the clone */
+    final int assemblingFeatureLength;
+    /** begin of the aligned J part in the reference J gene */
+    final int jOffset;
+    /** end of alignment of V gene in the global coordinate grid */
+    final int rightAssemblingFeatureBound;
+    /** splitting rehion in global coordinates */
+    final Range splitRegion;
+    /** parameters */
+    FullSeqAssemblerParameters parameters;
+    /** aligner parameters */
     final VDJCAlignerParameters alignerParameters;
 
     final TObjectIntHashMap<NucleotideSequence> sequenceToVariantId
@@ -60,11 +67,12 @@ final class FullSeqAggregator {
 
     final TIntObjectHashMap<NucleotideSequence> variantIdToSequence = new TIntObjectHashMap<>();
 
-    FullSeqAggregator(Clone clone, VDJCAlignerParameters alignerParameters) {
+    public FullSeqAssembler(FullSeqAssemblerParameters parameters, Clone clone, VDJCAlignerParameters alignerParameters) {
         if (alignerParameters.getVAlignerParameters().getScoring() instanceof AffineGapAlignmentScoring
                 || alignerParameters.getJAlignerParameters().getScoring() instanceof AffineGapAlignmentScoring)
             throw new IllegalArgumentException("Do not support Affine Gap Alignment Scoring.");
 
+        this.parameters = parameters;
         this.clone = clone;
         this.alignerParameters = alignerParameters;
         GeneFeature[] assemblingFeatures = clone.getAssemblingFeatures();
@@ -94,6 +102,7 @@ final class FullSeqAggregator {
 
         this.nLeftDummies = 1024; // fixme
 
+        int splitRegionBegin = -1, splitRegionEnd = -1;
         if (hasV) {
             VDJCHit vHit = clone.getBestHit(Variable);
             GeneFeature vFeature = vHit.getAlignedFeature();
@@ -101,6 +110,15 @@ final class FullSeqAggregator {
             this.lengthV =
                     gene.getPartitioning().getLength(vFeature)
                             - gene.getFeature(GeneFeature.intersection(assemblingFeature, vFeature)).size();
+            if (parameters.subCloningRegion != null) {
+                int p = gene.getPartitioning().getRelativePosition(vFeature, parameters.subCloningRegion.getFirstPoint());
+                if (p != -1)
+                    splitRegionBegin = nLeftDummies + p;
+
+                p = gene.getPartitioning().getRelativePosition(vFeature, parameters.subCloningRegion.getLastPoint());
+                if (p != -1)
+                    splitRegionEnd = nLeftDummies + p;
+            }
         } else
             this.lengthV = 0;
 
@@ -109,19 +127,35 @@ final class FullSeqAggregator {
         if (hasJ) {
             VDJCHit jHit = clone.getBestHit(Joining);
             VDJCGene gene = jHit.getGene();
-            this.jOffset = gene.getPartitioning().getRelativePosition(jHit.getAlignedFeature(), assemblingFeature.getLastPoint());
-            this.jLength = gene.getPartitioning().getLength(jHit.getAlignedFeature()) - jOffset;
+            GeneFeature jFeature = jHit.getAlignedFeature();
+            this.jOffset = gene.getPartitioning().getRelativePosition(jFeature, assemblingFeature.getLastPoint());
+            this.jLength = gene.getPartitioning().getLength(jFeature) - jOffset;
+
+            if (parameters.subCloningRegion != null) {
+                int p = gene.getPartitioning().getRelativePosition(jFeature, parameters.subCloningRegion.getLastPoint());
+                if (p != -1)
+                    splitRegionEnd = nLeftDummies + lengthV + assemblingFeatureLength + p;
+
+                p = gene.getPartitioning().getRelativePosition(jFeature, parameters.subCloningRegion.getFirstPoint());
+                if (p != -1)
+                    splitRegionBegin = nLeftDummies + lengthV + assemblingFeatureLength + p;
+            }
         } else {
             this.jOffset = 0;
             this.jLength = 0;
         }
+
+        if (splitRegionBegin != -1 && splitRegionEnd != -1)
+            this.splitRegion = new Range(splitRegionBegin, splitRegionEnd);
+        else
+            this.splitRegion = null;
 
         this.rightAssemblingFeatureBound = nLeftDummies + lengthV + assemblingFeatureLength;
     }
 
     /* ======================================== Find variants ============================================= */
 
-    Clone[] callVariants(RawVariantsData data) {
+    public Clone[] callVariants(RawVariantsData data) {
         OutputPort<int[]> port = data.createPort();
         List<VariantBranch> branches = new ArrayList<>();
         BitSet allReads = new BitSet();
@@ -605,7 +639,7 @@ final class FullSeqAggregator {
                 || a1.getSequence1() != a2.getSequence1() /* Compare reference */)
             throw new IllegalArgumentException();
 
-        return new Alignment<>(a1.getSequence1(), a1.getAbsoluteMutations().combineWith(a2.getAbsoluteMutations()),
+        return new Alignment<>(a1.getSequence1(), a1.getAbsoluteMutations().concat(a2.getAbsoluteMutations()),
                 new Range(a1.getSequence1Range().getFrom(), a2.getSequence1Range().getTo()),
                 new Range(a1.getSequence2Range().getFrom(), a2.getSequence2Range().getTo()),
                 a1.getScore() + a2.getScore());
@@ -653,16 +687,16 @@ final class FullSeqAggregator {
 
         // Will be used if no significant variant is found
         int bestVariant = -1;
-        int bestVariantSumQuality = -1;
+        long bestVariantSumQuality = -1;
 
         ArrayList<Variant> variants = new ArrayList<>();
         do {
             if (currentIndex == count || currentVariant != (int) (targets[currentIndex] >>> 40)) {
                 // Checking significance conditions
-                if ((1.0 * nonEdgePoints / (currentIndex - blockBegin) >= minimalNonEdgePointsFraction)
-                        && ((variantSumQuality >= minimalSumQuality
-                        && variantSumQuality >= minimalQualityShare * totalSumQuality)
-                        || variantSumQuality >= decisiveSumQualityThreshold)) {
+                if ((1.0 * nonEdgePoints / (currentIndex - blockBegin) >= parameters.minimalNonEdgePointsFraction)
+                        && ((variantSumQuality >= parameters.minimalSumQuality
+                        && variantSumQuality >= parameters.minimalQualityShare * totalSumQuality)
+                        || variantSumQuality >= parameters.decisiveSumQualityThreshold)) {
                     // Variant is significant
                     BitSet reads = new BitSet();
                     for (int j = currentIndex - 1; j >= blockBegin; --j)
@@ -676,7 +710,7 @@ final class FullSeqAggregator {
                     if (variantSumQuality > bestVariantSumQuality) {
                         bestVariant = currentVariant;
                         // totalSumQuality is definitely less than Long because variantSumQuality < decisiveSumQualityThreshold
-                        bestVariantSumQuality = (int) totalSumQuality;
+                        bestVariantSumQuality = variantSumQuality;
                     }
                 }
 
@@ -705,7 +739,7 @@ final class FullSeqAggregator {
             reads.or(unassignedVariants);
             // nSignificant = 1 (will not be practically used, only one variant, don't care)
             return Collections.singletonList(
-                    new Variant(bestVariant << 8 | Math.min(SequenceQuality.MAX_QUALITY_VALUE, bestVariantSumQuality),
+                    new Variant(bestVariant << 8 | (int) Math.min((long) SequenceQuality.MAX_QUALITY_VALUE, bestVariantSumQuality),
                             reads, 1));
         } else {
             for (Variant variant : variants)
@@ -728,7 +762,7 @@ final class FullSeqAggregator {
 
     /* ======================================== Collect raw initial data ============================================= */
 
-    RawVariantsData calculateRawData(Supplier<OutputPort<VDJCAlignments>> alignments) {
+    public RawVariantsData calculateRawData(Supplier<OutputPort<VDJCAlignments>> alignments) {
         if (!sequenceToVariantId.isEmpty())
             throw new IllegalStateException();
 
@@ -814,7 +848,7 @@ final class FullSeqAggregator {
         };
     }
 
-    static abstract class RawVariantsData {
+    public static abstract class RawVariantsData {
         final int nReads;
         final int[] points;
         final int[] coverage;
@@ -862,7 +896,8 @@ final class FullSeqAggregator {
         Alignment<NucleotideSequence> vAlignment =
                 (vHit == null
                         || vHit.getAlignment(iTarget) == null
-                        || !Objects.equals(genes.v, vHit.getGene()))
+                        || !Objects.equals(genes.v, vHit.getGene())
+                        || vHit.getAlignment(iTarget).getSequence1Range().getFrom() > lengthV)
                         ? null
                         : vHit.getAlignment(iTarget);
 
@@ -870,7 +905,8 @@ final class FullSeqAggregator {
         Alignment<NucleotideSequence> jAlignment =
                 (jHit == null
                         || jHit.getAlignment(iTarget) == null
-                        || !Objects.equals(genes.j, jHit.getGene()))
+                        || !Objects.equals(genes.j, jHit.getGene())
+                        || jHit.getAlignment(iTarget).getSequence1Range().getTo() < jOffset)
                         ? null
                         : jHit.getAlignment(iTarget);
 
@@ -928,7 +964,7 @@ final class FullSeqAggregator {
         Range
                 alSeq2Range = alignment.getSequence2Range(),
                 alSeq2RangeIntersection = alSeq2Range.intersectionWithTouch(seq2Range),
-                alSeq1RangeIntersection = alignment.convertToSeq1Range(alSeq2RangeIntersection);
+                alSeq1RangeIntersection = convertToSeq1Range(alignment, alSeq2RangeIntersection);
 
         assert alSeq1RangeIntersection != null;
 
@@ -949,6 +985,22 @@ final class FullSeqAggregator {
             points.add(createPointSequence(i + shift, seq2, i, i + 1, alignment.getSequence2Range()));
     }
 
+    static Range convertToSeq1Range(Alignment alignment, Range rangeInSeq2) {
+        int from = alignment.convertToSeq1Position(rangeInSeq2.getFrom());
+        int to = alignment.convertToSeq1Position(rangeInSeq2.getTo() - 1);
+
+        if (from == -1 || to == -1)
+            return null;
+
+        if (from < 0)
+            from = -2 - from;
+        if (to < 0)
+            to = -3 - to;
+
+        return new Range(from, to + 1);
+    }
+
+
     void toPointSequencesNoAlignments(List<PointSequence> points,
                                       NSequenceWithQuality seq2,
                                       Range seq2Range,
@@ -962,6 +1014,8 @@ final class FullSeqAggregator {
     }
 
     PointSequence createPointSequence(int point, NSequenceWithQuality seq, int from, int to, Range seq2alignmentRange) {
+        if (point >= nLeftDummies + lengthV && point < nLeftDummies + lengthV + assemblingFeatureLength)
+            throw new IllegalArgumentException();
         if (from == to) {
             byte left = from > 0 ? seq.getQuality().value(from - 1) : -1;
             byte right = from + 1 < seq.size() ? seq.getQuality().value(from + 1) : -1;
@@ -976,17 +1030,23 @@ final class FullSeqAggregator {
             else
                 quality = (byte) (((int) left + right) / 2);
 
-            if ((seq.size() - seq2alignmentRange.getTo() < alignmentEdgeDelta && seq.size() - to <= edgePadding)
-                    || (seq2alignmentRange.getFrom() < alignmentEdgeDelta && from <= edgePadding))
+            if (!inSplitRegion(point)
+                    || (seq.size() - seq2alignmentRange.getTo() < parameters.alignedSequenceEdgeDelta && seq.size() - to <= parameters.alignmentEdgeRegionSize)
+                    || (seq2alignmentRange.getFrom() < parameters.alignedSequenceEdgeDelta && from <= parameters.alignmentEdgeRegionSize))
                 quality |= 0x80;
 
             return new PointSequence(point, NSequenceWithQuality.EMPTY, quality);
         }
         NSequenceWithQuality r = seq.getRange(from, to);
         byte quality = r.getQuality().minValue();
-        if ((seq.size() - seq2alignmentRange.getTo() < alignmentEdgeDelta && seq.size() - to <= edgePadding)
-                || (seq2alignmentRange.getFrom() < alignmentEdgeDelta && from <= edgePadding))
+        if (!inSplitRegion(point)
+                || (seq.size() - seq2alignmentRange.getTo() < parameters.alignedSequenceEdgeDelta && seq.size() - to <= parameters.alignmentEdgeRegionSize)
+                || (seq2alignmentRange.getFrom() < parameters.alignedSequenceEdgeDelta && from <= parameters.alignmentEdgeRegionSize))
             quality |= 0x80;
         return new PointSequence(point, r, quality);
+    }
+
+    private boolean inSplitRegion(int p) {
+        return splitRegion == null || splitRegion.contains(p);
     }
 }
