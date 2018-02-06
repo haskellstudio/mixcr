@@ -89,7 +89,7 @@ public class Main {
                 new VersionInfoAction(),
                 new ActionAlignmentsDiff(),
                 new ActionAssemblePartialAlignments(),
-                new ActionAssembleContig(),
+                new ActionAssembleContigs(),
                 new ActionExportReads(),
                 new ActionClonesDiff(),
                 new ActionFilterAlignments(),
