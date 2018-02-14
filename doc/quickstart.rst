@@ -177,7 +177,7 @@ For the full length cDNA-based immunoglobulin repertoire analysis we generally r
   ::
   
     > mixcr align -p kaligner2 -s hsa -r alignmentReport.txt -OreadsLayout=Collinear \
-      -OvParameters.geneFeatureToAlign=VTranscript read_R1.fastq.gz read_R2.fastq.gz \
+      -OvParameters.geneFeatureToAlign=VTranscriptWithP read_R1.fastq.gz read_R2.fastq.gz \
       alignments.vdjca
      
   Option ``-s`` allows to specify species (e.g. homo sapiens - ``hsa``, mus musculus - ``mmu``). Parameter ``-OreadsLayout`` allow us to set paired-end reads orientation (``Collinear``, ``Opposite``, ``Unknown``). Note, that after MiGEC analysis paired-end read pairs are in ``Collinear`` orientation.
